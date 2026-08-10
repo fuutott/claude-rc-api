@@ -149,6 +149,20 @@ class Event:
         result, not something you typed."""
         return [b for b in self._content_blocks() if isinstance(b, dict) and b.get("type") == "tool_result"]
 
+    def thinking(self) -> str:
+        """Concatenated extended-thinking text from an assistant turn's
+        ``thinking`` / ``redacted_thinking`` content blocks (``text()`` skips
+        these). Redacted blocks surface as a placeholder."""
+        out = []
+        for block in self._content_blocks():
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "thinking":
+                out.append(block.get("thinking", ""))
+            elif block.get("type") == "redacted_thinking":
+                out.append("[redacted thinking]")
+        return "".join(out)
+
     # -- turn/idle detection (RC + MA) ------------------------------------
     @property
     def is_turn_end(self) -> bool:

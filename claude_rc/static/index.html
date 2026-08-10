@@ -126,6 +126,18 @@
     padding: 6px 10px; border-radius: 8px; max-width: 82%; }
   .tool .name { color: var(--warn); font-weight: 600; }
   .tool .args { color: #b9a06a; white-space: pre-wrap; word-break: break-all; }
+  .tool-result { align-self: flex-start; font-family: var(--mono); font-size: 12px;
+    color: var(--muted); white-space: pre-wrap; word-break: break-word; max-width: 82%;
+    padding: 2px 10px 2px 12px; border-left: 2px solid var(--border); }
+  .tool-result.err { color: #ffb3b6; border-left-color: var(--danger); }
+  .think { align-self: flex-start; font-style: italic; color: var(--muted); font-size: 13px;
+    max-width: 82%; white-space: pre-wrap; padding: 2px 12px; border-left: 2px solid var(--border); }
+  .todo { align-self: flex-start; font-family: var(--mono); font-size: 13px; max-width: 82%;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  .todo .todo-h { color: var(--assistant); font-weight: 600; margin-bottom: 4px; }
+  .todo .t { display: block; white-space: pre-wrap; }
+  .todo .done { color: var(--muted); text-decoration: line-through; }
+  .todo .doing { color: var(--accent); font-weight: 600; }
   .divider { align-self: center; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
   .divider::before, .divider::after { content: ""; height: 1px; width: 40px; background: var(--border); }
   .attention { align-self: center; color: #1a1206; background: var(--warn); font-weight: 600;
@@ -412,30 +424,33 @@ function eventNode(ev) {
   const frag = document.createDocumentFragment();
   const text = (ev.text || "").trim();
 
-  if (ev.role === "user" && text) {
+  const results = ev.tool_results || [];
+  if (ev.role === "user" && results.length) {
+    // the worker echoing tool output back — render results, not a prompt
+    for (const r of results) frag.appendChild(toolResultNode(r));
+  } else if (ev.role === "user" && text) {
     const m = el("div", "msg user");
     m.appendChild(el("div", "who", "you"));
     m.appendChild(el("div", null, text));
     frag.appendChild(m);
   } else if (ev.role === "assistant") {
+    if ((ev.thinking || "").trim()) frag.appendChild(el("div", "think", ev.thinking.trim()));
     if (text) {
       const m = el("div", "msg assistant");
       m.appendChild(el("div", "who", "claude"));
       m.appendChild(el("div", null, text));
       frag.appendChild(m);
     }
-    for (const t of ev.tool_uses || []) {
-      const tool = el("div", "tool");
-      tool.appendChild(el("span", "name", "⚙ " + (t.name || "tool")));
-      const args = argPreview(t.input);
-      if (args) { tool.appendChild(document.createTextNode("  ")); tool.appendChild(el("span", "args", args)); }
-      frag.appendChild(tool);
-    }
+    for (const t of ev.tool_uses || []) frag.appendChild(toolNode(t));
   } else if (ev.type === "system" && ev.subtype === "init") {
     frag.appendChild(el("div", "divider", "session started" + (ev.model ? " · " + ev.model : "")));
+  } else if (ev.type === "system" && ev.subtype === "compact_boundary") {
+    frag.appendChild(el("div", "divider", "context compacted"));
   } else if (ev.type === "result") {
     expireOpenApprovals();
-    frag.appendChild(el("div", "divider", "turn complete" + (ev.subtype && ev.subtype !== "success" ? " · " + ev.subtype : "")));
+    frag.appendChild(resultDivider(ev));
+  } else if (ev.type === "rate_limit_event") {
+    frag.appendChild(el("div", "attention", "⏳ rate limited"));
   } else if (ev.is_question && ev.request_id) {
     frag.appendChild(questionCard(ev));
   } else if (ev.is_blocking_control && ev.blocking_subtype === "can_use_tool" && ev.request_id) {
@@ -572,6 +587,45 @@ function markAnswered(requestId, verdict) {
   const actions = card.querySelector(".actions");
   if (actions) actions.replaceWith(el("div", "verdict", verdict || "answered"));
 }
+function toolNode(t) {
+  if (t.name === "TodoWrite" && t.input && t.input.todos) return todoNode(t.input);
+  const tool = el("div", "tool");
+  tool.appendChild(el("span", "name", "⚙ " + (t.name || "tool")));
+  const args = argPreview(t.input);
+  if (args) { tool.appendChild(document.createTextNode("  ")); tool.appendChild(el("span", "args", args)); }
+  return tool;
+}
+function todoNode(input) {
+  const box = el("div", "todo");
+  box.appendChild(el("div", "todo-h", "Update todos"));
+  for (const td of (input.todos || [])) {
+    const s = (td.status || "").toLowerCase();
+    const mark = s === "completed" ? "✔" : s === "in_progress" ? "◐" : "☐";
+    const cls = s === "completed" ? "done" : s === "in_progress" ? "doing" : "";
+    box.appendChild(el("div", "t " + cls, mark + " " + (td.content || td.activeForm || "")));
+  }
+  return box;
+}
+function toolResultNode(r) {
+  const d = el("div", "tool-result" + (r.is_error ? " err" : ""));
+  let t = (r.text || "").trim() || "(no output)";
+  const lines = t.split("\n");
+  if (lines.length > 12) t = lines.slice(0, 12).join("\n") + `\n… +${lines.length - 12} more lines`;
+  d.textContent = "⎿ " + t.replace(/\n/g, "\n  ");
+  return d;
+}
+function resultDivider(ev) {
+  const u = ev.usage || {};
+  const bad = ev.subtype && ev.subtype !== "success";
+  const bits = [bad ? ev.subtype.replace(/_/g, " ") : "turn complete"];
+  if (u.duration_ms) bits.push((u.duration_ms / 1000).toFixed(1) + "s");
+  if (u.cost_usd) bits.push("$" + u.cost_usd.toFixed(3));
+  if (u.input_tokens || u.output_tokens) bits.push(fmtTokens(u.input_tokens) + "↑ " + fmtTokens(u.output_tokens) + "↓");
+  const d = el("div", "divider", bits.join(" · "));
+  if (bad) d.style.color = "var(--danger)";
+  return d;
+}
+function fmtTokens(n) { if (!n) return "0"; return n >= 1000 ? (n / 1000).toFixed(1) + "k" : "" + n; }
 function argPreview(input) {
   if (input == null) return "";
   let s;

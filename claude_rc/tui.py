@@ -184,6 +184,91 @@ def _result_text(block: dict) -> tuple[str, bool]:
     return "".join(parts), is_error
 
 
+def thinking_block(text: str, max_lines: int = 30) -> Table:
+    """Extended thinking, recessed: a ``✻`` gutter with the text dim + italic,
+    capped so a long chain of thought doesn't flood the transcript."""
+    lines = text.strip().splitlines() or [""]
+    extra = len(lines) - max_lines
+    body = Text("\n".join(lines[:max_lines]), style="italic dim")
+    if extra > 0:
+        body.append(f"\n… +{extra} more line{'s' if extra != 1 else ''}", style=MUTED)
+    grid = Table.grid(expand=True)
+    grid.add_column(width=2, no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_row(Text("✻", style=MUTED), body)
+    return grid
+
+
+def todo_list(inp: dict) -> Text:
+    """A TodoWrite call as a checklist — done (✔), in-progress (◐), pending (☐) —
+    the way the Claude Code CLI surfaces its plan."""
+    out = Text()
+    out.append("● ", style=f"bold {GREEN}")
+    out.append("Update todos", style="bold")
+    for todo in inp.get("todos") or []:
+        if not isinstance(todo, dict):
+            continue
+        status = (todo.get("status") or "").lower()
+        content = todo.get("content") or todo.get("activeForm") or ""
+        if status == "completed":
+            mark, mstyle, cstyle = "✔", GREEN, "dim strike"
+        elif status == "in_progress":
+            mark, mstyle, cstyle = "◐", ACCENT, f"bold {ACCENT}"
+        else:
+            mark, mstyle, cstyle = "☐", MUTED, MUTED
+        out.append(f"\n  {mark} ", style=mstyle)
+        out.append(content, style=cstyle)
+    return out
+
+
+def plan_block(inp: dict) -> Table:
+    """An ExitPlanMode call: the proposed plan rendered as Markdown under a
+    ``●`` bullet, so it reads as the plan it is rather than tool arguments."""
+    grid = Table.grid(expand=True)
+    grid.add_column(width=2, no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_row(Text("●", style=f"bold {ACCENT}"),
+                 Markdown("**Plan**\n\n" + (inp.get("plan") or "")))
+    return grid
+
+
+def tool_render(tool: dict):
+    """Dispatch a tool call to its renderer — checklist for TodoWrite, a plan
+    for ExitPlanMode, otherwise the compact ``● Name(arg)`` line."""
+    name = tool.get("name")
+    inp = tool.get("input")
+    if name == "TodoWrite" and isinstance(inp, dict) and inp.get("todos"):
+        return todo_list(inp)
+    if name == "ExitPlanMode" and isinstance(inp, dict) and inp.get("plan"):
+        return plan_block(inp)
+    return tool_call_line(tool)
+
+
+def _fmt_n(n) -> str:
+    if not n:
+        return "0"
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def result_divider(ev: Event) -> Text:
+    """The turn-complete divider, carrying the usage footer Claude prints —
+    duration, cost, tokens — and turning red when the turn errored."""
+    ok = ev.subtype in (None, "success")
+    bits = ["turn complete" if ok else (ev.subtype or "error").replace("_", " ")]
+    dur = ev.payload.get("duration_ms")
+    if dur:
+        bits.append(f"{dur / 1000:.1f}s")
+    cost = ev.payload.get("total_cost_usd")
+    if cost:
+        bits.append(f"${cost:.3f}")
+    usage = ev.payload.get("usage") or {}
+    inp_t, out_t = usage.get("input_tokens"), usage.get("output_tokens")
+    if inp_t or out_t:
+        bits.append(f"{_fmt_n(inp_t)}↑ {_fmt_n(out_t)}↓")
+    line = Text(f"── {' · '.join(bits)} ──", style="dim" if ok else f"bold {DANGER}")
+    return line
+
+
 def tool_result_block(block: dict, max_lines: int = 10) -> Text:
     """A tool result hanging under its call on a ``└`` connector, truncated to
     ``max_lines`` (errors in red)."""
@@ -540,16 +625,22 @@ class RemoteControlTUI(App):
             elif text:
                 log.write(user_bar(text, log.size.width or 80))
         elif ev.role == "assistant":
+            think = ev.thinking().strip()
+            if think:
+                log.write(thinking_block(think))
             if text:
                 log.write(assistant_body(text))
             for tool in ev.tool_uses():
-                log.write(tool_call_line(tool))
+                log.write(tool_render(tool))
         elif ev.type == "system" and ev.subtype == "init":
             model = ev.payload.get("model") or "?"
             log.write(f"[dim]── session started · {escape(str(model))} ──[/dim]")
+        elif ev.type == "system" and ev.subtype == "compact_boundary":
+            log.write("[dim]── context compacted ──[/dim]")
         elif ev.type == "result":
-            tail = f" · {ev.subtype}" if ev.subtype and ev.subtype != "success" else ""
-            log.write(f"[dim]── turn complete{escape(tail)} ──[/dim]")
+            log.write(result_divider(ev))
+        elif ev.type == "rate_limit_event":
+            log.write(f"[bold {DANGER}]⏳ rate limited[/]")
         elif ev.is_question:
             first = next(
                 (q.get("question") for q in (ev.tool_input or {}).get("questions") or []

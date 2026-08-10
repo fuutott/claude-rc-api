@@ -113,6 +113,46 @@ def test_transcript_renderables():
     assert "more line" in many
 
 
+def test_thinking_todos_and_usage_renderables():
+    from rich.console import Console
+    from claude_rc.tui import result_divider, thinking_block, todo_list, tool_render
+    from claude_rc.events import Event as _E
+
+    console = Console(width=70)
+
+    def render(obj):
+        with console.capture() as cap:
+            console.print(obj)
+        return cap.get()
+
+    # thinking: recessed, capped
+    assert "reasoning" in render(thinking_block("some reasoning here"))
+    capped = render(thinking_block("\n".join(str(i) for i in range(50)), max_lines=10))
+    assert "more line" in capped
+
+    # TodoWrite dispatches to a checklist with status marks
+    todos = {"todos": [
+        {"content": "done thing", "status": "completed"},
+        {"content": "doing thing", "status": "in_progress"},
+        {"content": "later thing", "status": "pending"},
+    ]}
+    out = render(tool_render({"name": "TodoWrite", "input": todos}))
+    assert "✔" in out and "◐" in out and "☐" in out and "doing thing" in out
+
+    # ExitPlanMode renders the plan
+    plan = render(tool_render({"name": "ExitPlanMode", "input": {"plan": "# Step one"}}))
+    assert "Plan" in plan and "Step one" in plan
+
+    # result divider carries the usage footer, red-flagged on error
+    ok = _E.from_wire({"payload": {"type": "result", "subtype": "success",
+        "duration_ms": 4300, "total_cost_usd": 0.0123,
+        "usage": {"input_tokens": 1200, "output_tokens": 340}}})
+    line = render(result_divider(ok))
+    assert "turn complete" in line and "4.3s" in line and "$0.012" in line and "1.2k" in line
+    err = _E.from_wire({"payload": {"type": "result", "subtype": "error_max_turns"}})
+    assert "error max turns" in render(result_divider(err))
+
+
 def test_render_event_handles_tool_result(monkeypatch):
     """A user event carrying tool_result blocks renders as output, not a prompt."""
     async def scenario():

@@ -379,6 +379,39 @@ def test_webui_event_to_dict_permission_fields():
     assert d["has_suggestions"] is True
 
 
+def test_webui_event_to_dict_thinking_results_usage():
+    from claude_rc.webui import event_to_dict
+
+    # thinking blocks surface for the web UI
+    a = Event.from_wire({"payload": {"type": "assistant", "message": {"role": "assistant",
+        "content": [{"type": "thinking", "thinking": "hmm"},
+                    {"type": "text", "text": "hi"}]}}})
+    da = event_to_dict(a)
+    assert da["thinking"] == "hmm" and da["text"] == "hi"
+
+    # tool_result blocks (on a user event) flatten to text + error flag
+    u = Event.from_wire({"payload": {"type": "user", "message": {"role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out", "is_error": True}]}}})
+    du = event_to_dict(u)
+    assert du["tool_results"] == [{"text": "out", "is_error": True}]
+
+    # result usage footer
+    r = Event.from_wire({"payload": {"type": "result", "subtype": "success",
+        "duration_ms": 4300, "total_cost_usd": 0.0123,
+        "usage": {"input_tokens": 1200, "output_tokens": 340}}})
+    dr = event_to_dict(r)
+    assert dr["usage"]["cost_usd"] == 0.0123 and dr["usage"]["input_tokens"] == 1200
+
+
+def test_event_thinking_accessor():
+    e = Event.from_wire({"payload": {"type": "assistant", "message": {"role": "assistant",
+        "content": [{"type": "thinking", "thinking": "step "},
+                    {"type": "redacted_thinking", "data": "xx"},
+                    {"type": "text", "text": "answer"}]}}})
+    assert e.thinking() == "step [redacted thinking]"
+    assert e.text() == "answer"
+
+
 # --- credentials -----------------------------------------------------------
 def test_load_credentials_from_file(tmp_path: Path):
     p = tmp_path / ".credentials.json"

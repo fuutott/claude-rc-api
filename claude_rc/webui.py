@@ -69,24 +69,51 @@ _R_MARK = re.compile(rf"^/api/sessions/{_SID}/mark_read$")
 _R_ARCHIVE = re.compile(rf"^/api/sessions/{_SID}/archive$")
 
 
+def _result_text(block: dict) -> tuple[str, bool]:
+    """Flatten a ``tool_result`` content block to (text, is_error)."""
+    content = block.get("content")
+    is_error = bool(block.get("is_error"))
+    if isinstance(content, str):
+        return content, is_error
+    parts = []
+    for b in content or []:
+        if isinstance(b, dict) and b.get("type") == "text":
+            parts.append(b.get("text", ""))
+        elif isinstance(b, str):
+            parts.append(b)
+    return "".join(parts), is_error
+
+
 def event_to_dict(ev: Event) -> dict:
     """Flatten an :class:`Event` into the JSON shape the UI consumes."""
     blocking_subtype = None
     if ev.type == "control_request":
         blocking_subtype = ev.control_subtype
+    usage = ev.payload.get("usage") or {}
     return {
         "type": ev.type,
         "subtype": ev.subtype,
         "role": ev.role,
         "text": ev.text(),
+        "thinking": ev.thinking(),
         "tool_uses": [
             {"name": t.get("name"), "input": t.get("input"), "id": t.get("id")}
             for t in ev.tool_uses()
+        ],
+        "tool_results": [
+            {"text": (r := _result_text(b))[0], "is_error": r[1]}
+            for b in ev.tool_results()
         ],
         "sequence_num": ev.sequence_num,
         "id": ev.id,
         "timestamp": ev.processed_at,
         "model": ev.payload.get("model") if ev.type == "system" else None,
+        "usage": {
+            "cost_usd": ev.payload.get("total_cost_usd"),
+            "duration_ms": ev.payload.get("duration_ms"),
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+        } if ev.type == "result" else None,
         "is_turn_end": ev.is_turn_end,
         "is_terminal": ev.is_terminal,
         "is_blocking_control": ev.is_blocking_control,
