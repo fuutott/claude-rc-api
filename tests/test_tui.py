@@ -523,6 +523,39 @@ def test_ctrl_c_copies_transcript_selection_while_composer_focused(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_copy_on_select(monkeypatch):
+    """Finishing a selection drag copies it immediately (the Mac path: ⌘C
+    never reaches a TUI, and iTerm's own default is copy-on-selection — so
+    drag must equal copy). A click that clears the selection must NOT clobber
+    the clipboard."""
+    from textual import events as tevents
+    from claude_rc.tui import user_bar
+
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            await app.query_one("#transcript").mount(user_bar("drag equals copy"))
+            await pilot.pause(0.2)
+            copied = []
+            monkeypatch.setattr(app, "copy_to_clipboard", lambda text: copied.append(text))
+
+            _selected_text(app)  # a live selection, as after a drag
+            app.screen.post_message(tevents.TextSelected())
+            await pilot.pause(0.1)
+            assert copied and "drag equals copy" in copied[-1]
+
+            # a plain click clears the selection, then fires TextSelected —
+            # nothing must be copied over the clipboard
+            copied.clear()
+            app.screen.clear_selection()
+            app.screen.post_message(tevents.TextSelected())
+            await pilot.pause(0.1)
+            assert copied == []
+
+    asyncio.run(scenario())
+
+
 def test_transcript_survives_session_switch():
     """Selecting a session clears the transcript and loads its history as
     selectable widgets; switching again resets cleanly."""

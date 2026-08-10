@@ -55,6 +55,7 @@ from typing import Optional
 
 from rich.markup import escape
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -911,6 +912,22 @@ class RemoteControlTUI(App):
                 self.call_from_thread(self.notify, f"answer failed: {exc}", severity="error")
 
         self.run_worker(_send, thread=True, group="control")
+
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        """Copy-on-select: the moment a selection drag ends, its text goes to
+        the clipboard. This is what makes copying work on macOS muscle memory —
+        ⌘C never reaches a TUI (the terminal keeps the ⌘ key for itself), and
+        iTerm's own default is copy-on-selection anyway, so Mac users don't
+        expect to press anything: drag, then paste. After the drag, ⌘C is a
+        harmless no-op and the clipboard already holds the selection. ctrl+c
+        still copies explicitly (and is the way on other terminals).
+
+        The screen also fires TextSelected for a click that *clears* the
+        selection — get_selected_text() is None then, so the clipboard is
+        never clobbered by a stray click."""
+        text = self.screen.get_selected_text()
+        if text:
+            self.copy_to_clipboard(text)
 
     def copy_to_clipboard(self, text: str) -> None:
         """Copy selected text to the system clipboard.
