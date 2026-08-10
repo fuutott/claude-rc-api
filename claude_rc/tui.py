@@ -12,8 +12,9 @@ in this project's colour scheme.
 
 Run it with::
 
-    claude-rc tui                # pick a session from the sidebar
-    claude-rc tui cse_abc123     # jump straight into one
+    fabio                        # pick a session from the sidebar
+    fabio cse_abc123             # jump straight into one
+    claude-rc tui [cse_id]       # the same thing under the main CLI
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·

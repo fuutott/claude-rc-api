@@ -367,6 +367,23 @@ def test_sidebar_marks_attached_session():
     asyncio.run(scenario())
 
 
+def test_fabio_entry_point(monkeypatch):
+    """The `fabio` command forwards to the TUI, with an optional session id."""
+    import pytest as _pytest
+    import claude_rc.tui as tui_mod
+    from claude_rc.cli import fabio_main
+
+    seen = {}
+    monkeypatch.setattr(tui_mod, "run", lambda session_id=None: seen.__setitem__("sid", session_id))
+
+    assert fabio_main([]) == 0
+    assert seen["sid"] is None
+    assert fabio_main(["cse_abc"]) == 0
+    assert seen["sid"] == "cse_abc"
+    with _pytest.raises(SystemExit):        # --version exits via argparse
+        fabio_main(["--version"])
+
+
 def test_toggle_sidebar():
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
