@@ -479,6 +479,18 @@ class Composer(TextArea):
             event.prevent_default()
             self.post_message(self.Submitted(self, self.text))
             return
+        if event.key in ("ctrl+c", "super+c"):
+            # TextArea's own ctrl+c binding copies ITS selection and eats the
+            # key — and the composer is focused nearly all the time, so a drag
+            # over the transcript followed by ctrl+c copied nothing. When the
+            # composer has no selection of its own and the screen does, hand
+            # the key to the screen's copy action (the transcript selection).
+            # Selecting inside the composer still copies the composer's text.
+            if not self.selected_text and self.screen.selections:
+                event.stop()
+                event.prevent_default()
+                self.screen.action_copy_text()
+                return
         if event.key in ("ctrl+j", "alt+enter", "shift+enter"):
             event.stop()
             event.prevent_default()

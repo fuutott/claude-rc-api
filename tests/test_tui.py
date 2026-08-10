@@ -487,6 +487,42 @@ def test_composer_grows_and_submits_multiline():
     asyncio.run(scenario())
 
 
+def test_ctrl_c_copies_transcript_selection_while_composer_focused(monkeypatch):
+    """The composer (TextArea) binds ctrl+c to copy ITS OWN selection, and it
+    holds focus nearly all the time — so a transcript drag-select + ctrl+c
+    silently copied nothing. The composer must hand ctrl+c to the screen's
+    copy action whenever the transcript owns the live selection."""
+    from claude_rc.tui import user_bar
+
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            t = app.query_one("#transcript")
+            await t.mount(user_bar("copy me please"))
+            await pilot.pause(0.2)
+            copied = []
+            monkeypatch.setattr(app, "copy_to_clipboard", lambda text: copied.append(text))
+            app.query_one("#composer").focus()
+            await pilot.pause(0.1)
+            assert _selected_text(app)  # transcript selection is live
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert copied and "copy me please" in copied[0]
+
+            # but text selected INSIDE the composer still copies composer text
+            copied.clear()
+            composer = app.query_one("#composer")
+            composer.value = "mine"
+            await pilot.pause(0.1)
+            composer.select_all()
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert copied and copied[0] == "mine"
+
+    asyncio.run(scenario())
+
+
 def test_transcript_survives_session_switch():
     """Selecting a session clears the transcript and loads its history as
     selectable widgets; switching again resets cleanly."""
