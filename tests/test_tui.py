@@ -423,19 +423,41 @@ def test_toggle_sidebar():
     asyncio.run(scenario())
 
 
-def test_toggle_sidebar_reloads_transcript(monkeypatch):
-    """With a session open, toggling the sidebar reloads it so the transcript
-    re-wraps to the new pane width (RichLog doesn't reflow on its own)."""
+def test_toggle_sidebar_rerenders_from_cache(monkeypatch):
+    """With a session open, toggling the sidebar re-renders from the in-memory
+    cache (no API refetch) so the transcript re-wraps to the new pane width."""
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             app._sid = "cse_1"
-            calls = []
-            monkeypatch.setattr(app, "_select_session", lambda sid: calls.append(sid))
+            reloaded, rerendered = [], []
+            monkeypatch.setattr(app, "_select_session", lambda sid: reloaded.append(sid))
+            monkeypatch.setattr(app, "_rerender", lambda: rerendered.append(True))
             await pilot.press("ctrl+b")
-            await pilot.pause(0.1)
-            assert calls == ["cse_1"]
+            await pilot.pause(0.2)  # let call_after_refresh fire
+            assert rerendered and not reloaded  # cache, not API
+
+    asyncio.run(scenario())
+
+
+def test_event_cache_populates_on_load():
+    """History (and live events) are cached so the transcript can be redrawn
+    without re-hitting the API."""
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._select_session("cse_1")
+            for _ in range(20):
+                await pilot.pause(0.1)
+                if app._events:
+                    break
+            # FakeRC history has 3 events (init, user, control_request)
+            assert len(app._events) == 3
+            # a fresh switch resets the cache
+            app._select_session("cse_1")
+            assert app._events == []
 
     asyncio.run(scenario())
 
