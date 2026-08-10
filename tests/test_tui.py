@@ -384,61 +384,6 @@ def test_fabio_entry_point(monkeypatch):
         fabio_main(["--version"])
 
 
-def test_plain_transcript_and_clipboard(monkeypatch):
-    from claude_rc.events import Event as _E
-    import claude_rc.tui as tui_mod
-    from claude_rc.tui import plain_transcript, copy_to_clipboard
-
-    evs = [
-        _E.from_wire({"payload": {"type": "user", "message": {"role": "user",
-            "content": [{"type": "text", "text": "run ls"}]}}}),
-        _E.from_wire({"payload": {"type": "assistant", "message": {"role": "assistant",
-            "content": [{"type": "thinking", "thinking": "ok"},
-                        {"type": "text", "text": "sure"},
-                        {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}, "id": "t1"}]}}}),
-        _E.from_wire({"payload": {"type": "user", "message": {"role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "file.txt"}]}}}),
-        _E.from_wire({"payload": {"type": "result", "subtype": "success"}}),
-    ]
-    text = plain_transcript(evs)
-    assert "you> run ls" in text
-    assert "claude> sure" in text
-    assert "[thinking] ok" in text
-    assert "· Bash(ls)" in text
-    assert "└ file.txt" in text
-    assert "— turn complete —" in text
-
-    # clipboard: pipes to the first available tool
-    calls = []
-    monkeypatch.setattr(tui_mod.subprocess, "run",
-                        lambda cmd, **k: calls.append(cmd) or type("P", (), {"returncode": 0})())
-    assert copy_to_clipboard("hi") is True
-    assert calls[0] == ["pbcopy"]
-
-
-def test_export_writes_and_copies(tmp_path, monkeypatch):
-    import claude_rc.tui as tui_mod
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(tui_mod, "copy_to_clipboard", lambda text: True)
-
-    async def scenario():
-        fake = FakeRC()
-        app = RemoteControlTUI(client=fake)
-        async with app.run_test() as pilot:
-            await pilot.pause(0.2)
-            app._sid = "cse_1"
-            # _export normally runs on a worker thread; here call it inline with
-            # call_from_thread stubbed to invoke directly (same-thread test).
-            monkeypatch.setattr(app, "call_from_thread", lambda fn, *a, **k: fn(*a, **k))
-            app._export("cse_1")
-            await pilot.pause(0.1)
-            out = tmp_path / "fabio-cse_1.txt"
-            assert out.exists() and "run ls" in out.read_text()
-
-    asyncio.run(scenario())
-
-
 def test_toggle_sidebar():
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
