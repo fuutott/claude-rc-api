@@ -464,6 +464,10 @@ class RemoteControlTUI(App):
         self._stream_rc: Optional[RemoteControlClient] = None
         self._stream_thread: Optional[threading.Thread] = None
         self._sessions: list[dict] = []
+        # Events rendered for the open session, kept so the transcript can be
+        # re-rendered (e.g. re-wrapped on a sidebar toggle) without re-hitting
+        # the API. Reset on every session switch.
+        self._events: list[Event] = []
         self._approvals: deque[Event] = deque()
         self._answered: set[str] = set()
         self._modal_open = False
@@ -543,6 +547,7 @@ class RemoteControlTUI(App):
     def _select_session(self, sid: str) -> None:
         self._close_stream()
         self._sid = sid
+        self._events = []
         for item in self.query_one("#session-list", ListView).query(ListItem):
             item.set_class(getattr(item, "session_id", None) == sid, "attached")
         self._approvals.clear()
@@ -558,6 +563,16 @@ class RemoteControlTUI(App):
             target=self._attach, args=(sid,), daemon=True, name="fabio-stream"
         )
         self._stream_thread.start()
+
+    def _rerender(self) -> None:
+        """Redraw the transcript from the in-memory event cache — no API call,
+        no stream reconnect. Used when only the render width changed (e.g. a
+        sidebar toggle); RichLog caches lines at their write-width, so replaying
+        the events re-wraps them to the pane's current width."""
+        log = self.query_one("#transcript", RichLog)
+        log.clear()
+        for ev in self._events:
+            self._render_event(ev)
 
     def _close_stream(self) -> None:
         if self._stream_rc is not None:
@@ -610,6 +625,7 @@ class RemoteControlTUI(App):
         self.sub_title = " · ".join(
             x for x in (session.get("title"), model, session.get("worker_status")) if x
         )
+        self._events = list(history)  # seed the cache with history
         for ev in history:
             self._render_event(ev)
         for pending in pending_permissions(history):
@@ -618,6 +634,7 @@ class RemoteControlTUI(App):
     def _on_event(self, sid: str, ev: Event) -> None:
         if self._sid != sid:
             return
+        self._events.append(ev)  # keep the cache current with the live stream
         self._render_event(ev)
         if ev.is_blocking_control and ev.control_subtype == "can_use_tool":
             self._enqueue_approval(ev)
@@ -826,10 +843,10 @@ class RemoteControlTUI(App):
             self.query_one("#composer", Input).focus()
         # The transcript caches lines at their write-width and doesn't reflow
         # when the pane resizes, so toggling the sidebar would leave the old
-        # wrap. Reload the current session (exactly what clicking it does) to
-        # re-render the transcript at the new width.
+        # wrap. Re-render from the event cache (no API call) once the layout has
+        # settled to the new width — call_after_refresh defers until then.
         if self._sid:
-            self._select_session(self._sid)
+            self.call_after_refresh(self._rerender)
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
