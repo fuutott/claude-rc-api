@@ -384,6 +384,28 @@ def test_fabio_entry_point(monkeypatch):
         fabio_main(["--version"])
 
 
+def test_copy_to_clipboard_prefers_local_tool(monkeypatch):
+    """Selection-copy uses a local clipboard tool (reliable on macOS), not the
+    OSC 52 path that fails on macOS Terminal."""
+    import claude_rc.tui as tui_mod
+
+    calls = []
+    monkeypatch.setattr(tui_mod.shutil, "which",
+                        lambda t: f"/usr/bin/{t}" if t == "pbcopy" else None)
+    monkeypatch.setattr(tui_mod.subprocess, "run",
+                        lambda args, **k: calls.append(args) or type("P", (), {"returncode": 0})())
+    app = RemoteControlTUI(client=FakeRC())
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    # OSC 52 fallback must NOT run when a local tool exists
+    monkeypatch.setattr(type(app).__mro__[1], "copy_to_clipboard",
+                        lambda self, text: calls.append(["OSC52"]))
+    app.copy_to_clipboard("hello there")
+    assert calls and calls[0][0].endswith("pbcopy")
+    assert ["OSC52"] not in calls
+    # input piped to the tool
+    assert calls[0] == ["/usr/bin/pbcopy"]
+
+
 def test_toggle_sidebar():
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
