@@ -29,6 +29,9 @@ Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+o** hide/show the session list ·
 **ctrl+q** quit · **ctrl+c** copy selected text.
 
+The composer wraps and grows with what you type (up to 6 lines) — **Enter**
+sends, **ctrl+j** inserts a newline for multi-line messages.
+
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
 
@@ -55,6 +58,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import (
@@ -69,6 +73,7 @@ from textual.widgets import (
     OptionList,
     SelectionList,
     Static,
+    TextArea,
 )
 from textual.widgets.option_list import Option
 
@@ -426,6 +431,79 @@ class QuestionScreen(ModalScreen[tuple]):
         self.dismiss(("later", None))
 
 
+class Composer(TextArea):
+    """The message box: a TextArea that behaves like a chat composer.
+
+    Replaces the single-line ``Input``, whose overflow behavior is horizontal
+    scrolling — which rendered as a glitchy black-on-black smear once the text
+    outgrew the width. A TextArea *wraps* instead, and this one grows with its
+    content (1 line when short, up to ``MAX_LINES`` when long) so what you
+    typed stays visible.
+
+    **Enter submits** (posting ``Composer.Submitted``); **ctrl+j** (or
+    alt+enter, where the terminal reports it) inserts a newline for
+    deliberately multi-line messages. Exposes ``.value`` like Input so
+    call-sites and tests read naturally.
+    """
+
+    MAX_LINES = 6
+
+    class Submitted(Message):
+        """Posted when the user presses Enter."""
+
+        def __init__(self, composer: "Composer", value: str) -> None:
+            super().__init__()
+            self.composer = composer
+            self.value = value
+
+        @property
+        def control(self) -> "Composer":
+            return self.composer
+
+    def __init__(self, placeholder: str = "", id: Optional[str] = None) -> None:
+        super().__init__(placeholder=placeholder, id=id)
+
+    # -- Input-compatible surface -------------------------------------------
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, text: str) -> None:
+        self.load_text(text)
+
+    # -- keys ----------------------------------------------------------------
+    async def _on_key(self, event) -> None:
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self, self.text))
+            return
+        if event.key in ("ctrl+j", "alt+enter", "shift+enter"):
+            event.stop()
+            event.prevent_default()
+            self.insert("\n")
+            return
+        await super()._on_key(event)
+
+    # -- auto-grow -----------------------------------------------------------
+    def on_mount(self) -> None:
+        self._autosize()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self._autosize()  # then let the message bubble on
+
+    def on_resize(self, event) -> None:
+        self._autosize()  # a width change re-wraps the content
+
+    def _autosize(self) -> None:
+        """Track the wrapped content's height: 1..MAX_LINES visual lines, plus
+        2 for the border. Long input wraps into view instead of scrolling off
+        into the void."""
+        lines = max(1, self.wrapped_document.height)
+        self.styles.height = min(lines, self.MAX_LINES) + 2
+
+
 class RemoteControlTUI(App):
     """Terminal control panel for Claude Code Remote Control sessions."""
 
@@ -495,8 +573,8 @@ class RemoteControlTUI(App):
                 # their text, so drag-selection and copy work, and they reflow
                 # natively on any resize (no width caching, no min_width hack).
                 yield VerticalScroll(id="transcript")
-                yield Input(
-                    placeholder="Message the session…  (:model, :perm, :interrupt, :archive, :q)",
+                yield Composer(
+                    placeholder="Message the session…  (:model, :perm, :interrupt, :archive, :q · ctrl+j newline)",
                     id="composer",
                 )
         yield Footer()
@@ -856,7 +934,7 @@ class RemoteControlTUI(App):
         sidebar = self.query_one("#sidebar")
         sidebar.display = not sidebar.display
         if not sidebar.display:
-            self.query_one("#composer", Input).focus()
+            self.query_one("#composer", Composer).focus()
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
@@ -864,11 +942,9 @@ class RemoteControlTUI(App):
         self._show_next_approval()
 
     # -- composer / steering ------------------------------------------------
-    def on_input_submitted(self, message: Input.Submitted) -> None:
-        if message.input.id != "composer":
-            return
+    def on_composer_submitted(self, message: Composer.Submitted) -> None:
         text = message.value.strip()
-        message.input.value = ""
+        message.composer.value = ""
         if not text:
             return
         # /exit and /quit close Fabio itself rather than being sent to the
