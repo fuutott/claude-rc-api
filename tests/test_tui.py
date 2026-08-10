@@ -406,6 +406,29 @@ def test_copy_to_clipboard_prefers_local_tool(monkeypatch):
     assert calls[0] == ["/usr/bin/pbcopy"]
 
 
+def test_exit_quit_commands_close_the_app(monkeypatch):
+    """/exit and /quit close Fabio instead of being sent to the session."""
+    async def scenario():
+        fake = FakeRC()
+        app = RemoteControlTUI(client=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            exited = []
+            monkeypatch.setattr(app, "exit", lambda *a, **k: exited.append(True))
+            composer = app.query_one("#composer")
+            composer.focus()
+            for cmd in ("/exit", "/QUIT"):
+                exited.clear()
+                composer.value = cmd
+                await pilot.press("enter")
+                await pilot.pause(0.05)
+                assert exited, f"{cmd} should quit"
+            assert not any(c[0] == "send" for c in fake.calls)  # never sent onward
+
+    asyncio.run(scenario())
+
+
 def test_toggle_sidebar():
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())

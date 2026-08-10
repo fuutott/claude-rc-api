@@ -861,6 +861,10 @@ class RemoteControlTUI(App):
         message.input.value = ""
         if not text:
             return
+        # /exit and /quit close Fabio itself rather than being sent to the
+        # session (where the worker would just run them as slash commands).
+        if text.lower() in ("/exit", "/quit"):
+            return self.exit()
         if text.startswith(":"):
             return self._command(text[1:].strip())
         if not self._sid:
