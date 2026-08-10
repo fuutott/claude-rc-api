@@ -446,6 +446,46 @@ def test_toggle_sidebar():
     asyncio.run(scenario())
 
 
+def test_select_mode_hides_sidebar_and_restores(monkeypatch):
+    """ctrl+t drops mouse capture AND hides the session list (the terminal's
+    selection is screen-wide, so sidebar rows would end up in a drag over the
+    transcript); ctrl+t again re-arms the mouse and restores the list. The
+    headless test driver has no mouse hooks, so fakes stand in for them —
+    which also lets us assert the capture actually toggles."""
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            calls = []
+            monkeypatch.setattr(
+                app._driver, "_enable_mouse_support", lambda: calls.append("on"),
+                raising=False,
+            )
+            monkeypatch.setattr(
+                app._driver, "_disable_mouse_support", lambda: calls.append("off"),
+                raising=False,
+            )
+            sidebar = app.query_one("#sidebar")
+            assert sidebar.display is True
+            await pilot.press("ctrl+t")
+            await pilot.pause(0.1)
+            assert calls == ["off"] and sidebar.display is False
+            await pilot.press("ctrl+t")
+            await pilot.pause(0.1)
+            assert calls == ["off", "on"] and sidebar.display is True
+
+            # A list the user had already hidden stays hidden on exit.
+            await pilot.press("ctrl+o")
+            await pilot.pause(0.1)
+            await pilot.press("ctrl+t")
+            await pilot.pause(0.1)
+            await pilot.press("ctrl+t")
+            await pilot.pause(0.1)
+            assert sidebar.display is False
+
+    asyncio.run(scenario())
+
+
 def test_toggle_sidebar_rerenders_from_cache(monkeypatch):
     """With a session open, toggling the sidebar re-renders from the in-memory
     cache (no API refetch) so the transcript re-wraps to the new pane width."""

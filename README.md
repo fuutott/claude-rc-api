@@ -68,8 +68,10 @@ itself, so you can't drag-select transcript text the way you would in a normal
 terminal (and Shift-drag doesn't reliably escape it either). Press **`ctrl+t`**
 to enter *select mode*: this hands the mouse back to your terminal, so its own
 click-drag selection works over the whole screen — the transcript included —
-and **⌘C / Ctrl+C** copies as usual. Press `ctrl+t` again to restore in-app
-clicking and scrolling. (Once text is on the clipboard the copy path is your
+and **⌘C / Ctrl+C** copies as usual. The session list is hidden while select
+mode is on (the terminal's selection is screen-wide, so this stops a drag from
+grabbing the sidebar rows too) and restored — along with in-app clicking and
+scrolling — when you press `ctrl+t` again. (Once text is on the clipboard the copy path is your
 terminal's, not Fabio's — so this works the same over SSH.) For in-app copies
 elsewhere, Fabio still overrides Textual's clipboard to use `pbcopy` /
 `wl-copy` / `xclip`, falling back to OSC 52 for remote/SSH sessions.
