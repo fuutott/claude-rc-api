@@ -1,3 +1,50 @@
+# claude-rc-api — fuutott's fork, with a terminal UI
+
+This is a personal fork of
+[ThatCrispyToast/claude-rc-api](https://github.com/ThatCrispyToast/claude-rc-api)
+that adds **`claude-rc tui`** — a full-screen terminal control panel for your
+Claude Code Remote Control sessions (the claude.ai/code web page, but in your
+terminal): session sidebar, live transcript that renders the way the Claude
+Code CLI does (Markdown, syntax-highlighted code, tool calls with their output,
+thinking, todo checklists), a composer, steering commands, and first-class
+permission prompts — approve/deny tool calls (with the **full** tool input
+shown, never a clipped command) and answer AskUserQuestion prompts with option
+pickers.
+
+**Caveats:** these are the same unofficial, private endpoints the upstream
+project reverse-engineered (see the ⚠️ note below) — they can change or break at
+any time. The permission-*answer* path this fork adds is validated against the
+live-tested implementation in
+[g2-claude-remote](https://github.com/ThatCrispyToast/g2-claude-remote) but has
+not been exercised against a live worker from this fork itself; `updatedPermissions`
+("always allow") and the true-dialog answer shape remain unconfirmed (flagged in
+[`API_REFERENCE.md`](./API_REFERENCE.md) §3.2). A few upstream fixes ride along
+(`response_shape` unwrapping, newest-slice history, an SSE keep-alive stall).
+
+Install **from this fork**:
+
+```bash
+# run the TUI with zero install
+uvx --from "git+https://github.com/fuutott/claude-rc-api[cli,tui]" claude-rc tui
+
+# or install it into a venv / project
+pip install "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
+uv add "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
+
+# then
+claude-rc tui                    # pick a session from the sidebar
+claude-rc tui cse_abc123         # jump straight into one
+```
+
+Prerequisites are unchanged from upstream: log in to Claude Code with a
+claude.ai account (`claude` → `/login`), and have a session to drive
+(`claude remote-control` in some project). Full TUI docs are in the
+[TUI section](#tui) below.
+
+Below is the original readme.
+
+---
+
 # claude-rc-api
 
 Unofficial Python client for the Claude Code Remote Control web service,
