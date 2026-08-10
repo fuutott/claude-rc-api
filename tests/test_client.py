@@ -459,6 +459,41 @@ def test_load_credentials_missing_block(tmp_path: Path):
         load_credentials(p)
 
 
+def test_load_credentials_from_macos_keychain(tmp_path: Path, monkeypatch):
+    """On macOS with no credentials file, fall back to the login Keychain."""
+    import claude_rc.credentials as creds_mod
+
+    monkeypatch.delenv("CLAUDE_RC_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(creds_mod.sys, "platform", "darwin")
+    blob = json.dumps({"claudeAiOauth": {
+        "accessToken": "kc-token", "refreshToken": "r", "expiresAt": 9999999999999}})
+
+    class _Proc:
+        returncode = 0
+        stdout = blob
+
+    monkeypatch.setattr(creds_mod.subprocess, "run", lambda *a, **k: _Proc())
+    c = load_credentials(tmp_path / "nope.json")  # file absent → keychain
+    assert c.access_token == "kc-token"
+    assert c.source_path is None and not c.is_expired()
+
+
+def test_load_credentials_darwin_no_keychain_message(tmp_path: Path, monkeypatch):
+    import claude_rc.credentials as creds_mod
+
+    monkeypatch.delenv("CLAUDE_RC_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(creds_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        creds_mod.subprocess, "run",
+        lambda *a, **k: type("P", (), {"returncode": 1, "stdout": ""})(),
+    )
+    with pytest.raises(CredentialsError) as exc:
+        load_credentials(tmp_path / "nope.json")
+    assert "Keychain" in str(exc.value)
+
+
 # --- rotated-token recovery (long-lived clients) -----------------------------
 def _write_creds(p: Path, token: str, refresh: str, expires_at_ms: int) -> None:
     p.write_text(json.dumps({"claudeAiOauth": {
