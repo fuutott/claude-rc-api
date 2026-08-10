@@ -452,7 +452,7 @@ class RemoteControlTUI(App):
     #session-list > ListItem.attached.-highlight { background: $accent 30%; }
 
     #transcript { padding: 0 1; }
-    #composer { dock: bottom; }
+    #composer { dock: bottom; margin-top: 1; }
     """
 
     def __init__(self, client: Optional[RemoteControlClient] = None, session_id: Optional[str] = None):
