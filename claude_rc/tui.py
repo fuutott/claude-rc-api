@@ -475,7 +475,12 @@ class RemoteControlTUI(App):
             with Vertical(id="sidebar"):
                 yield ListView(id="session-list")
             with Vertical():
-                yield RichLog(id="transcript", markup=True, wrap=True, auto_scroll=True)
+                # min_width=20 (default is 78): without this, content refuses to
+                # wrap below 78 columns and overflows horizontally on a narrow
+                # terminal / phone instead of reflowing to the pane width.
+                yield RichLog(
+                    id="transcript", markup=True, wrap=True, auto_scroll=True, min_width=20
+                )
                 yield Input(
                     placeholder="Message the session…  (:model, :perm, :interrupt, :archive, :q)",
                     id="composer",
