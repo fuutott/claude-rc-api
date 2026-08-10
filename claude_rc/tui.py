@@ -18,7 +18,7 @@ Run it with::
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·
-**ctrl+s** save + copy the transcript · **ctrl+q** quit.
+**ctrl+q** quit.
 
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
@@ -35,8 +35,6 @@ Requires the ``tui`` extra (``pip install "claude-rc-api[tui]"``).
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import threading
 from collections import deque
 from typing import Optional
@@ -247,52 +245,6 @@ def _fmt_n(n) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def plain_transcript(events) -> str:
-    """A plain-text rendering of a session's events — for saving / copying out
-    (full-screen apps capture the mouse, so you can't drag-select the screen)."""
-    out: list[str] = []
-    for ev in events:
-        if ev.role == "user":
-            results = ev.tool_results()
-            if results:
-                for block in results:
-                    text, is_err = _result_text(block)
-                    tag = " (error)" if is_err else ""
-                    out.append(f"  └{tag} " + (text.strip() or "(no output)"))
-            elif ev.text().strip():
-                out.append("you> " + ev.text().strip())
-        elif ev.role == "assistant":
-            think = ev.thinking().strip()
-            if think:
-                out.append("[thinking] " + think)
-            if ev.text().strip():
-                out.append("claude> " + ev.text().strip())
-            for tool in ev.tool_uses():
-                arg = _arg_preview(tool.get("input"), limit=200)
-                out.append(f"  · {tool.get('name') or 'tool'}({arg})")
-        elif ev.type == "result":
-            out.append("— turn complete —")
-    return "\n".join(out) + "\n"
-
-
-def copy_to_clipboard(text: str) -> bool:
-    """Best-effort copy to the system clipboard via whatever CLI is present
-    (pbcopy on macOS, wl-copy/xclip/xsel on Linux). True if one succeeded."""
-    for cmd in (
-        ["pbcopy"],
-        ["wl-copy"],
-        ["xclip", "-selection", "clipboard"],
-        ["xsel", "--clipboard", "--input"],
-    ):
-        try:
-            proc = subprocess.run(cmd, input=text, text=True, timeout=10)
-            if proc.returncode == 0:
-                return True
-        except (OSError, subprocess.SubprocessError):
-            continue
-    return False
-
-
 def result_divider(ev: Event) -> Text:
     """The turn-complete divider, carrying the usage footer Claude prints —
     duration, cost, tokens — and turning red when the turn errored."""
@@ -475,7 +427,6 @@ class RemoteControlTUI(App):
         Binding("ctrl+g", "show_approvals", "Approvals"),
         Binding("ctrl+r", "refresh_sessions", "Refresh"),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar"),
-        Binding("ctrl+s", "save_transcript", "Copy/Save"),
     ]
 
     CSS = """
@@ -836,33 +787,6 @@ class RemoteControlTUI(App):
         sidebar.display = not sidebar.display
         if not sidebar.display:
             self.query_one("#composer", Input).focus()
-
-    def action_save_transcript(self) -> None:
-        """Save the session transcript to a text file and copy it to the
-        clipboard — the way to get text out, since the app captures the mouse
-        and the terminal can't drag-select the screen."""
-        if not self._sid:
-            return self.notify("select a session first", severity="warning")
-        self.run_worker(lambda: self._export(self._sid), thread=True, group="control")
-
-    def _export(self, sid: str) -> None:
-        try:
-            evs = self._rc.list_events(sid, limit=1000, sort_order="desc")
-        except (APIError, CredentialsError, OSError) as exc:
-            self.call_from_thread(self.notify, f"export failed: {exc}", severity="error")
-            return
-        evs.reverse()
-        text = plain_transcript(evs)
-        path = os.path.abspath(f"fabio-{sid}.txt")
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text)
-        except OSError as exc:
-            self.call_from_thread(self.notify, f"write failed: {exc}", severity="error")
-            return
-        copied = copy_to_clipboard(text)
-        note = f"saved {path}" + (" · copied to clipboard" if copied else " (no clipboard tool found)")
-        self.call_from_thread(self.notify, note, timeout=7)
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:

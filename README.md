@@ -61,15 +61,12 @@ Type in the composer to send a message (slash commands like `/effort high` run
 on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
 `:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
 pending approvals, `ctrl+r` refresh, `ctrl+b` hide/show the session list,
-`ctrl+s` save + copy the transcript, `ctrl+q` quit.
+`ctrl+q` quit.
 
-**Getting text out.** A full-screen TUI captures the mouse, so the terminal's
-own drag-to-select is disabled while Fabio runs. Use **`ctrl+s`** to write the
-transcript to `fabio-<session>.txt` in the working directory and copy it to the
-clipboard (via `pbcopy` / `wl-copy` / `xclip`). For an ad-hoc native selection,
-most terminals let you **hold Shift while dragging** to bypass mouse capture
-(iTerm2: Option or Shift; on some setups Fn), and `claude-rc events <cse_id>`
-dumps history as plain text from outside the app.
+**Selecting text.** A full-screen TUI captures the mouse, so the terminal's own
+drag-to-select is disabled while Fabio runs. Many terminals let you **hold Shift
+while dragging** to bypass that; otherwise `claude-rc events <cse_id>` prints a
+session's history as plain text from outside the app.
 
 **Permission prompts are first-class.** When the agent blocks on a
 `can_use_tool` request, a modal shows the tool name and the **full** tool input
