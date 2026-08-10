@@ -23,10 +23,12 @@ Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 To copy transcript text, press **ctrl+t** to enter *select mode*: this hands
 the mouse back to your terminal so its native click-drag selection works over
 the whole screen — the transcript included — and **⌘C / Ctrl+C** copies as
-usual. Press **ctrl+t** again to restore in-app clicking and scrolling. (A
-Textual app captures every mouse event for itself, which is what otherwise
-prevents selecting transcript text — even Shift-drag doesn't reliably escape
-it.)
+usual. The session list is hidden while select mode is on (the terminal's
+selection is screen-wide, so this keeps a drag from grabbing the sidebar rows
+too) and restored when you press **ctrl+t** again, which also brings back in-app
+clicking and scrolling. (A Textual app captures every mouse event for itself,
+which is what otherwise prevents selecting transcript text — even Shift-drag
+doesn't reliably escape it.)
 
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
@@ -480,6 +482,7 @@ class RemoteControlTUI(App):
         # terminal's own click-drag selection works over the whole screen —
         # including the transcript, which in-app selection can't reach.
         self._select_mode = False
+        self._sidebar_before_select = True
 
     # -- layout ------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -842,20 +845,26 @@ class RemoteControlTUI(App):
                 continue
         super().copy_to_clipboard(text)  # OSC 52 fallback (SSH / remote terminals)
 
-    def action_toggle_sidebar(self) -> None:
-        """Hide/show the session list so the transcript can take the full width
-        (handy on a narrow terminal / phone). Focus moves to the composer when
+    def _set_sidebar(self, visible: bool) -> None:
+        """Show or hide the session list and re-wrap the transcript to the new
+        width. The transcript caches lines at their write-width and doesn't
+        reflow when the pane resizes, so a width change would leave the old wrap;
+        re-render from the event cache (no API call) once the layout has settled
+        — call_after_refresh defers until then. Focus moves to the composer when
         the list is hidden so keys still land somewhere sensible."""
         sidebar = self.query_one("#sidebar")
-        sidebar.display = not sidebar.display
-        if not sidebar.display:
+        if sidebar.display == visible:
+            return
+        sidebar.display = visible
+        if not visible:
             self.query_one("#composer", Input).focus()
-        # The transcript caches lines at their write-width and doesn't reflow
-        # when the pane resizes, so toggling the sidebar would leave the old
-        # wrap. Re-render from the event cache (no API call) once the layout has
-        # settled to the new width — call_after_refresh defers until then.
         if self._sid:
             self.call_after_refresh(self._rerender)
+
+    def action_toggle_sidebar(self) -> None:
+        """Hide/show the session list so the transcript can take the full width
+        (handy on a narrow terminal / phone)."""
+        self._set_sidebar(not self.query_one("#sidebar").display)
 
     def action_toggle_select(self) -> None:
         """Toggle 'select text' mode.
@@ -870,6 +879,11 @@ class RemoteControlTUI(App):
         whole screen — transcript included, rich rendering intact, ⌘C / Ctrl+C
         copies as usual. Toggle back on to click the sidebar / scroll again.
 
+        The terminal's selection is screen-wide, so we also hide the session
+        list while select mode is on — otherwise a drag over the transcript
+        grabs the sidebar rows beside it too. The list's prior visibility is
+        restored on the way out.
+
         Uses the platform driver's private mouse hooks (there is no public API);
         guarded so it degrades to a no-op rather than crashing if they're
         absent (e.g. the web driver)."""
@@ -881,14 +895,19 @@ class RemoteControlTUI(App):
         self._select_mode = not self._select_mode
         if self._select_mode:
             disable()
+            # Remember whether the list was showing so we can put it back, then
+            # hide it for a clean full-width transcript to select over.
+            self._sidebar_before_select = self.query_one("#sidebar").display
+            self._set_sidebar(False)
             self.notify(
-                "select mode ON — drag to select anywhere, ⌘C/Ctrl+C to copy; "
-                "ctrl+t to click/scroll again",
+                "select mode ON — drag over the transcript, ⌘C/Ctrl+C to copy; "
+                "ctrl+t to exit",
                 timeout=6,
             )
         else:
             enable()
-            self.notify("select mode OFF — mouse clicks/scroll restored")
+            self._set_sidebar(getattr(self, "_sidebar_before_select", True))
+            self.notify("select mode OFF — sidebar + mouse restored")
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
