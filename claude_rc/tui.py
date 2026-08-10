@@ -949,11 +949,18 @@ class RemoteControlTUI(App):
                 continue
             try:
                 subprocess.run([exe, *args], input=text, text=True, timeout=10)
-                self.notify(f"copied {len(text)} chars to clipboard")
+                self._selection_copied()
                 return
             except (OSError, subprocess.SubprocessError):
                 continue
         super().copy_to_clipboard(text)  # OSC 52 fallback (SSH / remote terminals)
+        self._selection_copied()
+
+    def _selection_copied(self) -> None:
+        """Clear the selection highlight after a copy — the highlight vanishing
+        IS the feedback that the text is on the clipboard (no toast)."""
+        if self.is_running:
+            self.screen.clear_selection()
 
     def action_toggle_sidebar(self) -> None:
         """Hide/show the session list so the transcript can take the full width

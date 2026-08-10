@@ -529,7 +529,16 @@ def test_copy_on_select(monkeypatch):
     drag must equal copy). A click that clears the selection must NOT clobber
     the clipboard."""
     from textual import events as tevents
+    import claude_rc.tui as tui_mod
     from claude_rc.tui import user_bar
+
+    # run the REAL copy path (pbcopy faked underneath) so the test also covers
+    # the highlight clearing on success
+    copied = []
+    monkeypatch.setattr(tui_mod.shutil, "which",
+                        lambda t: f"/usr/bin/{t}" if t == "pbcopy" else None)
+    monkeypatch.setattr(tui_mod.subprocess, "run",
+                        lambda args, input=None, **k: copied.append(input))
 
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
@@ -537,13 +546,13 @@ def test_copy_on_select(monkeypatch):
             await pilot.pause(0.2)
             await app.query_one("#transcript").mount(user_bar("drag equals copy"))
             await pilot.pause(0.2)
-            copied = []
-            monkeypatch.setattr(app, "copy_to_clipboard", lambda text: copied.append(text))
 
             _selected_text(app)  # a live selection, as after a drag
             app.screen.post_message(tevents.TextSelected())
             await pilot.pause(0.1)
             assert copied and "drag equals copy" in copied[-1]
+            # the highlight disappearing IS the copy feedback
+            assert not app.screen.selections
 
             # a plain click clears the selection, then fires TextSelected —
             # nothing must be copied over the clipboard
