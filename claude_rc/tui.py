@@ -18,11 +18,15 @@ Run it with::
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·
-**ctrl+q** quit.
+**ctrl+t** toggle select-text mode · **ctrl+q** quit.
 
-Select text by dragging over the transcript, then **⌘C / Ctrl+C** to copy it to
-the system clipboard (via ``pbcopy`` / ``wl-copy`` / ``xclip``, or OSC 52 when
-running remotely).
+To copy transcript text, press **ctrl+t** to enter *select mode*: this hands
+the mouse back to your terminal so its native click-drag selection works over
+the whole screen — the transcript included — and **⌘C / Ctrl+C** copies as
+usual. Press **ctrl+t** again to restore in-app clicking and scrolling. (A
+Textual app captures every mouse event for itself, which is what otherwise
+prevents selecting transcript text — even Shift-drag doesn't reliably escape
+it.)
 
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
@@ -433,6 +437,7 @@ class RemoteControlTUI(App):
         Binding("ctrl+g", "show_approvals", "Approvals"),
         Binding("ctrl+r", "refresh_sessions", "Refresh"),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar"),
+        Binding("ctrl+t", "toggle_select", "Select text"),
     ]
 
     CSS = """
@@ -471,6 +476,10 @@ class RemoteControlTUI(App):
         self._approvals: deque[Event] = deque()
         self._answered: set[str] = set()
         self._modal_open = False
+        # "Select text" mode: when on, we drop Textual's mouse capture so the
+        # terminal's own click-drag selection works over the whole screen —
+        # including the transcript, which in-app selection can't reach.
+        self._select_mode = False
 
     # -- layout ------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -847,6 +856,39 @@ class RemoteControlTUI(App):
         # settled to the new width — call_after_refresh defers until then.
         if self._sid:
             self.call_after_refresh(self._rerender)
+
+    def action_toggle_select(self) -> None:
+        """Toggle 'select text' mode.
+
+        A Textual app tells the terminal to report every mouse event (``\\x1b[?
+        1003h`` any-event tracking), which is what makes the app respond to
+        clicks and drags — but it also swallows the terminal's *own* click-drag
+        selection, so you can't select transcript text the way you would in a
+        normal terminal (and Shift-drag doesn't reliably escape any-event mode
+        in every terminal). Toggling this off drops mouse reporting entirely, so
+        the terminal takes the mouse back and native selection works across the
+        whole screen — transcript included, rich rendering intact, ⌘C / Ctrl+C
+        copies as usual. Toggle back on to click the sidebar / scroll again.
+
+        Uses the platform driver's private mouse hooks (there is no public API);
+        guarded so it degrades to a no-op rather than crashing if they're
+        absent (e.g. the web driver)."""
+        driver = self._driver
+        enable = getattr(driver, "_enable_mouse_support", None)
+        disable = getattr(driver, "_disable_mouse_support", None)
+        if driver is None or enable is None or disable is None:
+            return self.notify("select mode unavailable on this terminal", severity="warning")
+        self._select_mode = not self._select_mode
+        if self._select_mode:
+            disable()
+            self.notify(
+                "select mode ON — drag to select anywhere, ⌘C/Ctrl+C to copy; "
+                "ctrl+t to click/scroll again",
+                timeout=6,
+            )
+        else:
+            enable()
+            self.notify("select mode OFF — mouse clicks/scroll restored")
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
