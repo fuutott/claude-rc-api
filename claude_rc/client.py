@@ -40,6 +40,7 @@ from .events import (
     pending_permissions,
     permission_allow,
     permission_deny,
+    question_input,
     user_message,
     custom_tool_result,
 )
@@ -238,8 +239,16 @@ class RemoteControlClient:
         return []
 
     def get_session(self, session_id: str) -> dict:
-        """``GET /v1/code/sessions/{id}``."""
-        return self._ok(self._request("GET", self._url(session_id)))
+        """``GET /v1/code/sessions/{id}``.
+
+        The live endpoint wraps the session object under a ``response_shape``
+        key (unlike ``list_sessions``, which returns bare objects) — unwrap it
+        so both calls yield the same shape.
+        """
+        body = self._ok(self._request("GET", self._url(session_id)))
+        if isinstance(body, dict) and isinstance(body.get("response_shape"), dict):
+            return body["response_shape"]
+        return body
 
     def archive_session(self, session_id: str) -> bool:
         """``POST /v1/code/sessions/{id}/archive`` — end/hide a session. 409 = already archived."""
@@ -355,6 +364,7 @@ class RemoteControlClient:
         response: dict | None = None,
         *,
         error: str | None = None,
+        tool_use_id: str | None = None,
     ) -> dict:
         """Answer a worker's ``control_request`` with a ``control_response``.
 
@@ -363,7 +373,8 @@ class RemoteControlClient:
         :meth:`answer_permission`), ``error`` sends an error envelope instead.
         """
         return self.send_events(
-            session_id, [cli_control_response(request_id, response, error=error)]
+            session_id,
+            [cli_control_response(request_id, response, error=error, tool_use_id=tool_use_id)],
         )
 
     def answer_permission(
@@ -376,22 +387,47 @@ class RemoteControlClient:
         updated_permissions: list | None = None,
         message: str = "",
         interrupt: bool = False,
+        tool_use_id: str | None = None,
     ) -> dict:
         """Answer a ``can_use_tool`` permission prompt (approve or deny a tool call).
 
-        ``request_id`` is the prompt's :attr:`Event.control_request_id`. On allow,
-        pass the request's original ``input`` as ``updated_input`` (mirroring the
-        CLI; a modified value rewrites the tool call) and optionally the request's
+        ``request_id`` is the prompt's :attr:`Event.control_request_id`; pass its
+        :attr:`Event.tool_use_id` too when present. On allow, pass the request's
+        original ``input`` as ``updated_input`` (mirroring the CLI; a modified
+        value rewrites the tool call) and optionally the request's
         ``permission_suggestions`` as ``updated_permissions`` for "always allow".
         On deny, ``message`` is shown to the model and ``interrupt=True`` also
         stops the turn.
+
+        For **AskUserQuestion** prompts (:attr:`Event.is_question`), use
+        :meth:`answer_question` instead — a plain allow returns no picks to the
+        model and a deny fails the tool.
         """
         verdict = (
             permission_allow(updated_input, updated_permissions)
             if allow
             else permission_deny(message, interrupt=interrupt)
         )
-        return self.respond_control(session_id, request_id, verdict)
+        return self.respond_control(session_id, request_id, verdict, tool_use_id=tool_use_id)
+
+    def answer_question(
+        self,
+        session_id: str,
+        request_id: str,
+        answers: dict | None,
+        original_input: Any,
+        *,
+        tool_use_id: str | None = None,
+    ) -> dict:
+        """Answer an **AskUserQuestion** prompt (delivered as ``can_use_tool``).
+
+        ``answers`` maps question **text** → chosen label (or a list of labels
+        for multi-select); ``None`` / ``{}`` dismisses gracefully. Pass the
+        prompt's :attr:`Event.tool_input` as ``original_input`` — its
+        ``questions`` list must be echoed back or the tool crashes.
+        """
+        verdict = permission_allow(question_input(original_input, answers))
+        return self.respond_control(session_id, request_id, verdict, tool_use_id=tool_use_id)
 
     def pending_permission_requests(self, session_id: str, *, limit: int = 50) -> list[Event]:
         """Blocking ``control_request`` events still waiting on an answer.

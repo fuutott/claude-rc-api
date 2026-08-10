@@ -51,6 +51,10 @@ class FakeRC:
         self.calls.append(("answer", sid, rid, allow, kw))
         return {"ok": True}
 
+    def answer_question(self, sid, rid, answers, original_input, **kw):
+        self.calls.append(("answer_question", sid, rid, answers, original_input, kw))
+        return {"ok": True}
+
     def send_message(self, sid, text):
         self.calls.append(("send", sid, text))
         return {"ok": True}
@@ -169,6 +173,72 @@ def test_tui_composer_commands():
                 assert fake.calls[-1] == expected
 
     asyncio.run(scenario())
+
+
+def test_tui_question_flow():
+    from claude_rc.tui import QuestionScreen
+
+    q_input = {"questions": [{"question": "Which db?", "header": "DB",
+                              "options": [{"label": "postgres", "description": "the big one"},
+                                          {"label": "sqlite"}],
+                              "multiSelect": False}]}
+    ev = Event.from_wire({"sequence_num": 9, "payload": {
+        "type": "control_request", "request_id": "req-q",
+        "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+                    "tool_use_id": "toolu_q", "input": q_input}}})
+
+    async def scenario():
+        fake = FakeRC()
+        app = RemoteControlTUI(client=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            app._enqueue_approval(ev)
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, QuestionScreen)
+            await pilot.press("enter")  # pick the highlighted (first) option
+            await pilot.pause(0.3)
+            kind, sid, rid, answers, original, kw = fake.calls[-1]
+            assert kind == "answer_question" and rid == "req-q"
+            assert answers == {"Which db?": "postgres"}
+            assert original == q_input
+            assert kw["tool_use_id"] == "toolu_q"
+
+    asyncio.run(scenario())
+
+
+def test_approval_modal_shows_full_command():
+    """The whole point of the prompt: no silent truncation of the tool input.
+
+    (The mobile app clips the command; the modal here must show all of it.)
+    """
+    from textual.widgets import Static
+    from claude_rc.tui import format_full_input
+
+    # a long-but-realistic command: far over the old 4000-char clip
+    command = "git commit -m " + "x" * 8000 + " && echo SENTINEL_END"
+    ev = Event.from_wire({"sequence_num": 7, "payload": {
+        "type": "control_request", "request_id": "req-long",
+        "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                    "input": {"command": command}}}})
+
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            app._enqueue_approval(ev)
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ApprovalScreen)
+            body = str(app.screen.query_one(".input-json", Static).content)
+            assert "SENTINEL_END" in body            # the tail survived
+            assert "TRUNCATED" not in body           # nothing was clipped
+
+    asyncio.run(scenario())
+
+    # the safety cap announces itself instead of clipping silently
+    huge = format_full_input({"command": "y" * 300_000})
+    assert "⚠ TRUNCATED" in huge and "more characters not shown" in huge
 
 
 def test_retire_approval_drops_queued_prompt():

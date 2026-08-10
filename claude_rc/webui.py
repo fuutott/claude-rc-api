@@ -96,6 +96,7 @@ def event_to_dict(ev: Event) -> dict:
         "tool_name": ev.tool_name,
         "tool_input": ev.tool_input,
         "has_suggestions": bool(ev.permission_suggestions),
+        "is_question": ev.is_question,
     }
 
 
@@ -175,7 +176,11 @@ class _Handler(BaseHTTPRequestHandler):
             m = _R_EVENTS.match(path)
             if m:
                 limit = self._qint(self._query(), "limit", 200)
-                evs = self.rc.list_events(m["sid"], limit=limit, sort_order="asc")
+                # NEWEST `limit` events (desc + reverse → oldest→newest): asc
+                # would return the oldest slice of a long session and leave the
+                # UI's stream cursor far behind, replaying the whole backlog.
+                evs = self.rc.list_events(m["sid"], limit=limit, sort_order="desc")
+                evs.reverse()
                 return self._json({"events": [event_to_dict(e) for e in evs]})
             m = _R_SESSION.match(path)
             if m:
@@ -254,6 +259,18 @@ class _Handler(BaseHTTPRequestHandler):
             ),
             None,
         )
+        if "answers" in body and req is not None and req.is_question:
+            # AskUserQuestion: an allow with the picks in updatedInput.answers
+            # ({} = graceful dismiss). A deny would fail the tool instead.
+            answers = body.get("answers")
+            self.rc.answer_question(
+                sid,
+                request_id,
+                answers if isinstance(answers, dict) else {},
+                req.tool_input,
+                tool_use_id=req.tool_use_id,
+            )
+            return self._json({"ok": True})
         self.rc.answer_permission(
             sid,
             request_id,
@@ -264,6 +281,7 @@ class _Handler(BaseHTTPRequestHandler):
             ),
             message=body.get("message") or "",
             interrupt=bool(body.get("interrupt")),
+            tool_use_id=req.tool_use_id if req else None,
         )
         return self._json({"ok": True})
 
@@ -302,11 +320,13 @@ class _Handler(BaseHTTPRequestHandler):
 
         # A stream has no Content-Length; close the socket when it ends so the
         # client sees a clean end-of-response instead of a stalled keep-alive.
+        # Do NOT send `Connection: keep-alive` — BaseHTTPRequestHandler
+        # special-cases that header and flips close_connection back to False,
+        # leaving the socket to stall when the stream ends.
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")  # disable proxy buffering
         self.end_headers()
         self.wfile.write(b"retry: 3000\n: connected\n\n")

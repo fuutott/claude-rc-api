@@ -99,6 +99,14 @@ pending approvals, `ctrl+r` refresh, `ctrl+q` quit.
 an optional reason (`d`). `esc` defers; unanswered prompts queue up (`ctrl+g`
 brings them back), prompts answered from another controller (the web app,
 your phone) retire automatically, and a turn ending abandons stale ones.
+**AskUserQuestion prompts get their own flow** — the questions render as
+pickable option lists (single- and multi-select), answered on the permission
+path the way the API actually delivers them.
+
+The answer wire format matches the live-validated implementation in
+[`g2-claude-remote`](https://github.com/ThatCrispyToast/g2-claude-remote)
+(the glasses app whose bridge first confirmed it) — see
+[`API_REFERENCE.md`](./API_REFERENCE.md) §3.2.
 
 ## Web UI
 
@@ -155,9 +163,15 @@ rc.set_effort(sid, "high")  # low|medium|high|xhigh, or None = auto
 
 # answer permission prompts (can_use_tool)
 for req in rc.pending_permission_requests(sid):
+    if req.is_question:  # AskUserQuestion rides in as a can_use_tool prompt
+        rc.answer_question(sid, req.control_request_id,
+                           {"Which db?": "postgres"}, req.tool_input,
+                           tool_use_id=req.tool_use_id)
+        continue
     print(req.tool_name, req.tool_input)
     rc.answer_permission(sid, req.control_request_id, allow=True,
-                         updated_input=req.tool_input)
+                         updated_input=req.tool_input,
+                         tool_use_id=req.tool_use_id)
     # deny instead: allow=False, message="use the sandbox for that"
     # "always allow": updated_permissions=req.permission_suggestions
 ```
