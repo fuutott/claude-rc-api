@@ -118,6 +118,7 @@ def event_to_dict(ev: Event) -> dict:
         "is_terminal": ev.is_terminal,
         "is_blocking_control": ev.is_blocking_control,
         "blocking_subtype": blocking_subtype,
+        "rate_limit": ev.rate_limit_info(),
         # Control-protocol fields (permission prompts + their answers).
         "request_id": ev.control_request_id,
         "tool_name": ev.tool_name,

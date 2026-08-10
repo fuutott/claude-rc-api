@@ -149,6 +149,34 @@ class Event:
         result, not something you typed."""
         return [b for b in self._content_blocks() if isinstance(b, dict) and b.get("type") == "tool_result"]
 
+    def rate_limit_info(self) -> Optional[dict]:
+        """Classify a ``rate_limit_event`` — a status *pulse*, not an error.
+
+        Claude Code emits these to drive a usage indicator; most are routine
+        "you're fine" heartbeats. Returns ``{level, resets_at, status}`` where
+        ``level`` is ``ok`` (a normal pulse — don't surface it), ``warning``
+        (approaching the limit), or ``reached`` (actually rejected). ``None`` for
+        non-rate-limit events. Field locations are probed defensively; an
+        unrecognised shape is treated as ``ok`` so it never cries wolf."""
+        if self.type != "rate_limit_event":
+            return None
+        p = self.payload
+        info = p.get("rate_limit") or p.get("snapshot") or p
+        raw = str(info.get("status") or info.get("state") or "").lower()
+        rejected = info.get("rejected") is True or raw in (
+            "rejected", "exceeded", "limited", "throttled", "reached", "blocked"
+        )
+        warning = not rejected and (info.get("warning") is True or "warn" in raw)
+        reset = (
+            info.get("resets_at") or info.get("reset_at")
+            or info.get("resetsAt") or p.get("retry_after")
+        )
+        return {
+            "level": "reached" if rejected else ("warning" if warning else "ok"),
+            "resets_at": reset,
+            "status": raw or None,
+        }
+
     def thinking(self) -> str:
         """Concatenated extended-thinking text from an assistant turn's
         ``thinking`` / ``redacted_thinking`` content blocks (``text()`` skips

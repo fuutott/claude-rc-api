@@ -403,6 +403,27 @@ def test_webui_event_to_dict_thinking_results_usage():
     assert dr["usage"]["cost_usd"] == 0.0123 and dr["usage"]["input_tokens"] == 1200
 
 
+def test_rate_limit_info_classifies_pulses():
+    # a normal status pulse → ok (not surfaced)
+    ok = Event.from_wire({"payload": {"type": "rate_limit_event",
+        "rate_limit": {"status": "allowed"}}})
+    assert ok.rate_limit_info()["level"] == "ok"
+    # approaching → warning
+    warn = Event.from_wire({"payload": {"type": "rate_limit_event",
+        "rate_limit": {"status": "allowed_warning"}}})
+    assert warn.rate_limit_info()["level"] == "warning"
+    # actual rejection → reached, with reset passed through
+    hit = Event.from_wire({"payload": {"type": "rate_limit_event",
+        "rate_limit": {"status": "rejected", "resets_at": "2026-08-10T21:00:00Z"}}})
+    info = hit.rate_limit_info()
+    assert info["level"] == "reached" and info["resets_at"] == "2026-08-10T21:00:00Z"
+    # unknown shape defaults to ok — never cries wolf
+    unknown = Event.from_wire({"payload": {"type": "rate_limit_event", "foo": 1}})
+    assert unknown.rate_limit_info()["level"] == "ok"
+    # non-rate-limit events return None
+    assert Event.from_wire({"payload": {"type": "result"}}).rate_limit_info() is None
+
+
 def test_event_thinking_accessor():
     e = Event.from_wire({"payload": {"type": "assistant", "message": {"role": "assistant",
         "content": [{"type": "thinking", "thinking": "step "},
