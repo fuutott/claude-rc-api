@@ -123,7 +123,7 @@ Base: `https://api.anthropic.com`. All calls use the Mode-A headers from §2.1.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v1/code/sessions` | List your Remote Control sessions |
-| `GET` | `/v1/code/sessions/{id}` | Get one session |
+| `GET` | `/v1/code/sessions/{id}` | Get one session — NOTE: wraps the object under a `response_shape` key (the list returns bare objects); `RemoteControlClient.get_session` unwraps it |
 | `PUT` | `/v1/code/sessions/{id}` | Update title — body `{"title": "..."}` |
 | `POST` | `/v1/code/sessions/{id}/archive` | Archive/end (empty body `{}`; **200 or 409** = success) |
 | `POST` | `/v1/code/sessions/{id}/mark_read` | Mark read (optional `{sequence_num}`) |
@@ -223,26 +223,42 @@ emitting a `control_request` on the stream:
 The controller answers by POSTing a `control_response` event back through the
 same `…/events` ingest. This is the Claude Code stream-json control protocol
 (the remote-control bridge relays it verbatim between worker and controller);
-the response shape is the SDK's `PermissionResult`:
+the response shape is the SDK's `PermissionResult`. **Validated against live
+prompts** by [`g2-claude-remote`](https://github.com/ThatCrispyToast/g2-claude-remote)'s
+bridge (`build_permission_answer`), which this section mirrors:
 
 ```json
 { "type": "control_response",
   "response": { "subtype": "success", "request_id": "req_...",
+    "tool_use_id": "toolu_...",
     "response": { "behavior": "allow", "updatedInput": { "command": "rm -rf build" } } } }
 ```
 
-- **allow** — echo the request's `input` as `updatedInput` (a modified value
-  rewrites the tool call). Add `updatedPermissions` (typically the request's own
-  `permission_suggestions`) to persist an "always allow" rule.
-- **deny** — `{"behavior": "deny", "message": "shown to the model", "interrupt": false}`.
+- **allow** — `updatedInput` is REQUIRED: echo the request's `input` (a modified
+  value rewrites the tool call; the live-validated answers default to `{}` when
+  no input is known). Carry the request's `tool_use_id` when present. Adding
+  `updatedPermissions` (typically the request's own `permission_suggestions`)
+  should persist an "always allow" rule — that field is protocol-correct
+  (SDK `PermissionResult`) but not yet exercised live.
+- **deny** — `{"behavior": "deny", "message": "shown to the model"}` (the
+  validated answers always send a non-empty message; optional `"interrupt": true`
+  also stops the turn).
 - An error envelope (`{"subtype": "error", "request_id", "error"}`) refuses the
   request outright.
 
+**⚠️ AskUserQuestion is a `can_use_tool`, not a dialog** (confirmed live): its
+`input` carries the `questions`, and the answer is an **allow** whose
+`updatedInput` echoes `questions` (the tool destructures it and crashes when it
+is missing) plus `answers` — a map keyed by question **text** → chosen label
+(a list for multi-select; an empty map is the graceful dismiss, "The user did
+not answer the questions."). A plain deny fails the tool instead of answering
+it. The `request_user_dialog` / `side_question` subtypes exist for rarer true
+dialogs; a `{status: completed|cancelled, result}` inner response is the
+presumed shape there, still unconfirmed.
+
 A `result` event ending the turn abandons any unanswered prompt — treat older
 prompts as stale. Wrapped by `RemoteControlClient.answer_permission()` /
-`respond_control()` / `pending_permission_requests()`. ⚠️ Reconstructed from the
-CLI/SDK control protocol; the answer path has not yet been exercised against the
-live API (the request side and the blocking behaviour have).
+`answer_question()` / `respond_control()` / `pending_permission_requests()`.
 
 **Slash commands work as user messages** (confirmed live, 2026-07-17): a `user`
 event whose text is e.g. `/effort high` is executed by the remote-control worker

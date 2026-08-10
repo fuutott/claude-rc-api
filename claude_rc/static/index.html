@@ -145,6 +145,15 @@
   .approval.answered { opacity: .55; border-color: var(--border); }
   .approval.answered .head { color: var(--muted); }
   .approval .verdict { font-size: 12px; color: var(--muted); }
+  .approval.question { border-color: var(--user); background: #151b28; }
+  .approval.question .head { color: var(--user); }
+  .q-block { margin: 8px 0; }
+  .q-block .q-text { margin-bottom: 6px; }
+  .q-block .q-header { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .q-options { display: flex; gap: 6px; flex-wrap: wrap; }
+  .q-option { font-size: 13px; }
+  .q-option.picked { background: #1b2740; border-color: var(--user); color: #cfe0ff; }
+  .q-option .desc { color: var(--muted); font-size: 11px; }
 
   .composer { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--panel);
     padding: 12px 16px; display: flex; gap: 10px; align-items: flex-end; }
@@ -426,6 +435,8 @@ function eventNode(ev) {
   } else if (ev.type === "result") {
     expireOpenApprovals();
     frag.appendChild(el("div", "divider", "turn complete" + (ev.subtype && ev.subtype !== "success" ? " · " + ev.subtype : "")));
+  } else if (ev.is_question && ev.request_id) {
+    frag.appendChild(questionCard(ev));
   } else if (ev.is_blocking_control && ev.blocking_subtype === "can_use_tool" && ev.request_id) {
     frag.appendChild(approvalCard(ev));
   } else if (ev.is_blocking_control) {
@@ -466,6 +477,69 @@ function approvalCard(ev) {
   });
   card.appendChild(actions);
   return card;
+}
+function questionCard(ev) {
+  // AskUserQuestion rides in as a can_use_tool permission whose input holds
+  // the questions; it is answered by ALLOWING with an answers map (see server).
+  const card = el("div", "approval question");
+  card.dataset.requestId = ev.request_id;
+  const head = el("div", "head");
+  head.appendChild(document.createTextNode("❓ Claude asks"));
+  card.appendChild(head);
+
+  const questions = ((ev.tool_input || {}).questions || []).filter(q => q && q.question);
+  for (const q of questions) {
+    const block = el("div", "q-block");
+    block.dataset.question = q.question;
+    block.dataset.multi = q.multiSelect ? "1" : "";
+    const text = el("div", "q-text");
+    if (q.header) text.appendChild(el("div", "q-header", q.header));
+    text.appendChild(el("div", null, q.question));
+    block.appendChild(text);
+    const opts = el("div", "q-options");
+    for (const o of q.options || []) {
+      const label = typeof o === "string" ? o : (o.label || "");
+      if (!label) continue;
+      const b = el("button", "q-option", label);
+      if (o && o.description) b.title = o.description;
+      b.onclick = () => {
+        if (!q.multiSelect) {
+          for (const sib of opts.querySelectorAll(".q-option.picked")) {
+            if (sib !== b) sib.classList.remove("picked");
+          }
+        }
+        b.classList.toggle("picked");
+      };
+      opts.appendChild(b);
+    }
+    block.appendChild(opts);
+    card.appendChild(block);
+  }
+
+  const actions = el("div", "actions");
+  const answerBtn = el("button", "allow", "✓ Answer");
+  answerBtn.onclick = () => {
+    const answers = {};
+    for (const block of card.querySelectorAll(".q-block")) {
+      const picks = [...block.querySelectorAll(".q-option.picked")].map(b => b.textContent);
+      if (!picks.length) continue;
+      answers[block.dataset.question] = block.dataset.multi ? picks : picks[0];
+    }
+    answerQuestion(ev, answers, Object.keys(answers).length ? "answered" : "dismissed");
+  };
+  const dismissBtn = el("button", "deny", "✗ Dismiss");
+  dismissBtn.onclick = () => answerQuestion(ev, {}, "dismissed");
+  actions.appendChild(answerBtn);
+  actions.appendChild(dismissBtn);
+  card.appendChild(actions);
+  return card;
+}
+async function answerQuestion(ev, answers, verdict) {
+  try {
+    await post(`/api/sessions/${S.selectedId}/permission`,
+               { request_id: ev.request_id, behavior: "allow", answers });
+    markAnswered(ev.request_id, verdict);
+  } catch (e) { toast("Answer failed: " + e.message); }
 }
 async function answerPermission(ev, behavior, always, message) {
   try {

@@ -187,6 +187,26 @@ class Event:
         return self.control_request.get("input")
 
     @property
+    def tool_use_id(self) -> Optional[str]:
+        """``tool_use_id`` of a ``can_use_tool`` permission request."""
+        req = self.control_request
+        return req.get("tool_use_id") or req.get("toolUseId")
+
+    @property
+    def is_question(self) -> bool:
+        """True for an **AskUserQuestion** prompt. It arrives as a ``can_use_tool``
+        permission whose ``input`` carries ``questions`` (confirmed live by the
+        g2-claude-remote bridge) — NOT as ``request_user_dialog`` — and must be
+        answered as an *allow* with the picks in ``updatedInput.answers``
+        (see :func:`question_input`), not with a plain approve/deny."""
+        return (
+            self.control_subtype == "can_use_tool"
+            and isinstance(self.tool_input, dict)
+            and isinstance(self.tool_input.get("questions"), list)
+            and bool(self.tool_input["questions"])
+        )
+
+    @property
     def permission_suggestions(self) -> list:
         """``permission_suggestions`` of a ``can_use_tool`` request — ready-made
         ``updatedPermissions`` entries for "always allow" answers."""
@@ -243,24 +263,33 @@ def cli_control_request(subtype: str, request_id: str, **fields: Any) -> dict:
 
 
 def cli_control_response(
-    request_id: str, response: Optional[dict] = None, *, error: Optional[str] = None
+    request_id: str,
+    response: Optional[dict] = None,
+    *,
+    error: Optional[str] = None,
+    tool_use_id: Optional[str] = None,
 ) -> dict:
     """A ``control_response`` answering a worker's ``control_request``.
 
     This is the stream-json control protocol the worker itself speaks (the
     remote-control bridge relays it verbatim): a ``success`` envelope carries a
     ``response`` object whose shape depends on the request subtype, an ``error``
-    envelope carries an error string.
+    envelope carries an error string. For ``can_use_tool`` answers, pass the
+    request's ``tool_use_id`` through — the live-validated answers carry it.
     """
     if error is not None:
         return {
             "type": "control_response",
             "response": {"subtype": "error", "request_id": request_id, "error": error},
         }
-    return {
-        "type": "control_response",
-        "response": {"subtype": "success", "request_id": request_id, "response": response or {}},
+    resp: dict[str, Any] = {
+        "subtype": "success",
+        "request_id": request_id,
+        "response": response or {},
     }
+    if tool_use_id:
+        resp["tool_use_id"] = tool_use_id
+    return {"type": "control_response", "response": resp}
 
 
 def permission_allow(
@@ -268,26 +297,46 @@ def permission_allow(
 ) -> dict:
     """A ``can_use_tool`` allow verdict (the ``response`` for :func:`cli_control_response`).
 
-    ``updated_input`` should normally echo the request's original ``input`` (the
-    CLI sends it back; a modified value rewrites the tool call). Pass the
+    An allow must echo the tool input back as ``updatedInput`` — pass the
+    request's original ``input`` (a modified value rewrites the tool call);
+    ``None`` falls back to ``{}``, matching the live-validated answers. Pass the
     request's ``permission_suggestions`` as ``updated_permissions`` for an
     "always allow" that persists a rule.
     """
-    out: dict[str, Any] = {"behavior": "allow"}
-    if updated_input is not None:
-        out["updatedInput"] = updated_input
+    out: dict[str, Any] = {
+        "behavior": "allow",
+        "updatedInput": updated_input if updated_input is not None else {},
+    }
     if updated_permissions:
         out["updatedPermissions"] = updated_permissions
     return out
 
 
 def permission_deny(message: str = "", *, interrupt: bool = False) -> dict:
-    """A ``can_use_tool`` deny verdict. ``message`` is shown to the model;
-    ``interrupt=True`` also stops the current turn."""
-    out: dict[str, Any] = {"behavior": "deny", "message": message}
+    """A ``can_use_tool`` deny verdict. ``message`` is shown to the model (an
+    empty one is replaced with a stock line, matching the live-validated
+    answers); ``interrupt=True`` also stops the current turn."""
+    out: dict[str, Any] = {"behavior": "deny", "message": message or "Denied by controller"}
     if interrupt:
         out["interrupt"] = True
     return out
+
+
+def question_input(original_input: Any, answers: Optional[dict] = None) -> dict:
+    """The ``updatedInput`` that answers an **AskUserQuestion** prompt.
+
+    The tool is *allowed* with the picks riding in ``updatedInput``: ``answers``
+    maps question **text** → chosen label (or list of labels for multi-select);
+    an empty map is the graceful dismiss ("The user did not answer the
+    questions."). ``questions`` must be echoed from the original input — the
+    tool destructures it and crashes when missing. Confirmed live by the
+    g2-claude-remote bridge.
+    """
+    base = dict(original_input) if isinstance(original_input, dict) else {}
+    if not isinstance(base.get("questions"), list):
+        base["questions"] = []
+    base["answers"] = dict(answers or {})
+    return base
 
 
 # --- Outbound builders: Managed Agents -------------------------------------

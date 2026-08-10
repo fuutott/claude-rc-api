@@ -154,24 +154,57 @@ def _handle_blocking(rc: RemoteControlClient, sid: str, last) -> None:
         if last.control_subtype != "can_use_tool" or not last.control_request_id:
             _print(f"⚠ session blocked on: {last.control_subtype} (answer it elsewhere)")
             return
-        pretty = last.tool_input
-        pretty = pretty if isinstance(pretty, str) else json.dumps(pretty, indent=2, default=str)
-        _print(f"🔐 permission: {last.tool_name or 'tool'}")
-        for line in (pretty or "").splitlines()[:20]:
-            _print(f"   {line}")
-        try:
-            answer = input("allow? [y]es / [n]o / anything else = deny with that reason: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        allow = answer.lower() in ("y", "yes")
-        rc.answer_permission(
-            sid,
-            last.control_request_id,
-            allow,
-            updated_input=last.tool_input if allow else None,
-            message="" if allow or answer.lower() in ("n", "no") else answer,
-        )
+        if last.is_question:
+            answers = {}
+            for q in (last.tool_input or {}).get("questions") or []:
+                if not isinstance(q, dict) or not q.get("question"):
+                    continue
+                labels = [
+                    o if isinstance(o, str) else (o.get("label") or "")
+                    for o in q.get("options") or []
+                ]
+                labels = [x for x in labels if x]
+                _print(f"❓ {q['question']}")
+                for i, label in enumerate(labels, 1):
+                    _print(f"   {i}. {label}")
+                try:
+                    raw = input("pick number(s), or free text (empty = skip): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                if not raw:
+                    continue
+                picks = []
+                for part in raw.replace(",", " ").split():
+                    if part.isdigit() and 1 <= int(part) <= len(labels):
+                        picks.append(labels[int(part) - 1])
+                answers[q["question"]] = (
+                    (picks if q.get("multiSelect") else picks[0]) if picks else raw
+                )
+            rc.answer_question(
+                sid, last.control_request_id, answers, last.tool_input,
+                tool_use_id=last.tool_use_id,
+            )
+        else:
+            pretty = last.tool_input
+            pretty = pretty if isinstance(pretty, str) else json.dumps(pretty, indent=2, default=str)
+            _print(f"🔐 permission: {last.tool_name or 'tool'}")
+            for line in (pretty or "").splitlines()[:20]:
+                _print(f"   {line}")
+            try:
+                answer = input("allow? [y]es / [n]o / anything else = deny with that reason: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            allow = answer.lower() in ("y", "yes")
+            rc.answer_permission(
+                sid,
+                last.control_request_id,
+                allow,
+                updated_input=last.tool_input if allow else None,
+                message="" if allow or answer.lower() in ("n", "no") else answer,
+                tool_use_id=last.tool_use_id,
+            )
         # Follow the rest of the turn from where it blocked.
         start = last.sequence_num or 0
         last = None

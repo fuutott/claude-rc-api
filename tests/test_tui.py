@@ -51,6 +51,10 @@ class FakeRC:
         self.calls.append(("answer", sid, rid, allow, kw))
         return {"ok": True}
 
+    def answer_question(self, sid, rid, answers, original_input, **kw):
+        self.calls.append(("answer_question", sid, rid, answers, original_input, kw))
+        return {"ok": True}
+
     def send_message(self, sid, text):
         self.calls.append(("send", sid, text))
         return {"ok": True}
@@ -167,6 +171,38 @@ def test_tui_composer_commands():
                 await pilot.press("enter")
                 await pilot.pause(0.2)
                 assert fake.calls[-1] == expected
+
+    asyncio.run(scenario())
+
+
+def test_tui_question_flow():
+    from claude_rc.tui import QuestionScreen
+
+    q_input = {"questions": [{"question": "Which db?", "header": "DB",
+                              "options": [{"label": "postgres", "description": "the big one"},
+                                          {"label": "sqlite"}],
+                              "multiSelect": False}]}
+    ev = Event.from_wire({"sequence_num": 9, "payload": {
+        "type": "control_request", "request_id": "req-q",
+        "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+                    "tool_use_id": "toolu_q", "input": q_input}}})
+
+    async def scenario():
+        fake = FakeRC()
+        app = RemoteControlTUI(client=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            app._enqueue_approval(ev)
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, QuestionScreen)
+            await pilot.press("enter")  # pick the highlighted (first) option
+            await pilot.pause(0.3)
+            kind, sid, rid, answers, original, kw = fake.calls[-1]
+            assert kind == "answer_question" and rid == "req-q"
+            assert answers == {"Which db?": "postgres"}
+            assert original == q_input
+            assert kw["tool_use_id"] == "toolu_q"
 
     asyncio.run(scenario())
 

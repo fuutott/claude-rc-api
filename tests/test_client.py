@@ -248,19 +248,79 @@ def test_event_permission_accessors():
 def test_cli_control_response_shapes():
     from claude_rc.events import cli_control_response, permission_allow, permission_deny
 
-    ok = cli_control_response("rid-1", permission_allow({"command": "ls"}))
+    ok = cli_control_response("rid-1", permission_allow({"command": "ls"}), tool_use_id="toolu_1")
     assert ok == {"type": "control_response", "response": {
-        "subtype": "success", "request_id": "rid-1",
+        "subtype": "success", "request_id": "rid-1", "tool_use_id": "toolu_1",
         "response": {"behavior": "allow", "updatedInput": {"command": "ls"}}}}
+
+    # an allow must always carry updatedInput (confirmed live) — None falls back to {}
+    assert permission_allow(None) == {"behavior": "allow", "updatedInput": {}}
 
     always = permission_allow({"command": "ls"}, updated_permissions=[{"type": "addRules"}])
     assert always["updatedPermissions"] == [{"type": "addRules"}]
 
     deny = cli_control_response("rid-2", permission_deny("not now", interrupt=True))
     assert deny["response"]["response"] == {"behavior": "deny", "message": "not now", "interrupt": True}
+    assert "tool_use_id" not in deny["response"]
+    # an empty deny message is replaced with a stock line (matching live answers)
+    assert permission_deny("")["message"] == "Denied by controller"
 
     err = cli_control_response("rid-3", error="boom")
     assert err["response"] == {"subtype": "error", "request_id": "rid-3", "error": "boom"}
+
+
+def test_question_input_and_detection():
+    from claude_rc.events import question_input
+
+    q_input = {"questions": [{"question": "Which db?", "header": "DB",
+                              "options": [{"label": "postgres"}, {"label": "sqlite"}],
+                              "multiSelect": False}]}
+    ev = Event.from_wire({"sequence_num": 5, "payload": {
+        "type": "control_request", "request_id": "req-q",
+        "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+                    "tool_use_id": "toolu_q", "input": q_input}}})
+    assert ev.is_question
+    assert ev.tool_use_id == "toolu_q"
+    # a normal permission is NOT a question
+    assert not _permission_request().is_question
+
+    # answers ride in updatedInput; questions must be echoed (tool crashes otherwise)
+    out = question_input(q_input, {"Which db?": "postgres"})
+    assert out["questions"] == q_input["questions"]
+    assert out["answers"] == {"Which db?": "postgres"}
+    # empty map = graceful dismiss; questions still echoed
+    dismissed = question_input(q_input, None)
+    assert dismissed["answers"] == {} and dismissed["questions"]
+
+
+def test_answer_question_wire_format(monkeypatch):
+    rc = _bare_rc()
+    sent = []
+    monkeypatch.setattr(rc, "send_events", lambda sid, evs: sent.append(list(evs)) or {"ok": 1})
+    q_input = {"questions": [{"question": "Which db?", "options": []}]}
+    rc.answer_question("cse_x", "req-q", {"Which db?": "postgres"}, q_input, tool_use_id="toolu_q")
+    resp = sent[0][0]["response"]
+    assert resp["subtype"] == "success" and resp["tool_use_id"] == "toolu_q"
+    inner = resp["response"]
+    assert inner["behavior"] == "allow"
+    assert inner["updatedInput"]["answers"] == {"Which db?": "postgres"}
+    assert inner["updatedInput"]["questions"] == q_input["questions"]
+
+
+def test_get_session_unwraps_response_shape(monkeypatch):
+    rc = _bare_rc()
+
+    class _Resp:
+        status_code = 200
+        content = b"x"
+        headers = {}
+
+        def json(self):
+            return {"response_shape": {"id": "cse_1", "status": "active"}}
+
+    monkeypatch.setattr(rc, "_request", lambda *a, **kw: _Resp())
+    monkeypatch.setattr(rc, "_url", lambda *p: "u")
+    assert rc.get_session("cse_1") == {"id": "cse_1", "status": "active"}
 
 
 def test_answer_permission_wire_format(monkeypatch):

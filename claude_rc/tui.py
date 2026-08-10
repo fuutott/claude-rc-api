@@ -35,7 +35,20 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    OptionList,
+    RichLog,
+    SelectionList,
+    Static,
+)
+from textual.widgets.option_list import Option
 
 from .client import APIError, RemoteControlClient
 from .credentials import CredentialsError
@@ -131,6 +144,82 @@ class ApprovalScreen(ModalScreen[tuple]):
             self.dismiss(("allow", True, message))
         else:
             self.dismiss((behavior, False, message))
+
+
+class QuestionScreen(ModalScreen[tuple]):
+    """One AskUserQuestion question (they arrive as ``can_use_tool`` prompts).
+
+    Dismisses with ``("picks", [labels])`` (empty list = skipped) or
+    ``("later", None)`` to defer the whole prompt.
+    """
+
+    BINDINGS = [
+        Binding("escape", "skip", "Skip"),
+        Binding("l", "later", "Later"),
+    ]
+
+    DEFAULT_CSS = """
+    QuestionScreen { align: center middle; }
+    QuestionScreen > Container {
+        width: 80%; max-width: 100; max-height: 80%;
+        border: round $accent; background: $surface; padding: 1 2;
+    }
+    QuestionScreen .title { text-style: bold; color: $accent; }
+    QuestionScreen .q-header { color: $text-muted; }
+    QuestionScreen OptionList, QuestionScreen SelectionList { max-height: 14; margin: 1 0; }
+    QuestionScreen Horizontal { height: auto; align-horizontal: right; }
+    QuestionScreen Button { margin-left: 2; }
+    """
+
+    def __init__(self, question: dict, index: int = 0, total: int = 1) -> None:
+        super().__init__()
+        self.question = question
+        self.index = index
+        self.total = total
+        self._labels: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        q = self.question
+        multi = bool(q.get("multiSelect") or q.get("multi_select"))
+        counter = f"  ({self.index + 1}/{self.total})" if self.total > 1 else ""
+        options = []
+        for o in q.get("options") or []:
+            label = o if isinstance(o, str) else (o.get("label") or "")
+            desc = "" if isinstance(o, str) else (o.get("description") or "")
+            if not label:
+                continue
+            self._labels.append(label)
+            options.append((label, desc))
+        with Container():
+            if q.get("header"):
+                yield Label(escape(str(q["header"])), classes="q-header")
+            yield Label(f"❓ {escape(q.get('question') or '')}{counter}", classes="title")
+            if multi:
+                yield SelectionList[str](*[(escape(lbl), lbl) for lbl, _ in options])
+                with Horizontal():
+                    yield Button("Done", variant="primary", id="done")
+                    yield Button("Skip (esc)", id="skip")
+            else:
+                yield OptionList(*[
+                    Option(escape(lbl) + (f" [dim]— {escape(desc)}[/dim]" if desc else ""))
+                    for lbl, desc in options
+                ])
+
+    def on_option_list_option_selected(self, message: OptionList.OptionSelected) -> None:
+        self.dismiss(("picks", [self._labels[message.option_index]]))
+
+    def on_button_pressed(self, message: Button.Pressed) -> None:
+        if message.button.id == "done":
+            picks = list(self.query_one(SelectionList).selected)
+            self.dismiss(("picks", picks))
+        else:
+            self.action_skip()
+
+    def action_skip(self) -> None:
+        self.dismiss(("picks", []))
+
+    def action_later(self) -> None:
+        self.dismiss(("later", None))
 
 
 class RemoteControlTUI(App):
@@ -327,6 +416,13 @@ class RemoteControlTUI(App):
         elif ev.type == "result":
             tail = f" · {ev.subtype}" if ev.subtype and ev.subtype != "success" else ""
             log.write(f"[dim]── turn complete{escape(tail)} ──[/dim]")
+        elif ev.is_question:
+            first = next(
+                (q.get("question") for q in (ev.tool_input or {}).get("questions") or []
+                 if isinstance(q, dict) and q.get("question")),
+                "",
+            )
+            log.write(f"[bold magenta]❓ question[/bold magenta] {escape(first)}")
         elif ev.is_blocking_control and ev.control_subtype == "can_use_tool":
             preview = _arg_preview(ev.tool_input)
             log.write(
@@ -360,6 +456,8 @@ class RemoteControlTUI(App):
         rid = ev.control_request_id
         if not rid or rid in self._answered:
             return self._show_next_approval()
+        if ev.is_question:
+            return self._present_question(ev)
         self._modal_open = True
 
         def _done(result: Optional[tuple]) -> None:
@@ -373,6 +471,55 @@ class RemoteControlTUI(App):
                 self._show_next_approval()
 
         self.push_screen(ApprovalScreen(ev, remaining=len(self._approvals)), _done)
+
+    def _present_question(self, ev: Event) -> None:
+        """Walk an AskUserQuestion's questions one modal at a time, then answer."""
+        rid = ev.control_request_id
+        questions = [
+            q for q in (ev.tool_input or {}).get("questions") or []
+            if isinstance(q, dict) and q.get("question")
+        ]
+        answers: dict[str, object] = {}
+        self._modal_open = True
+
+        def _step(i: int) -> None:
+            if i >= len(questions):
+                self._modal_open = False
+                self._answered.add(rid)
+                self._answer_question(ev, answers)
+                return self._show_next_approval()
+
+            def _done(result: Optional[tuple]) -> None:
+                kind, picks = result or ("later", None)
+                if kind == "later":
+                    self._modal_open = False
+                    self._approvals.appendleft(ev)
+                    return
+                if picks:
+                    q = questions[i]
+                    multi = bool(q.get("multiSelect") or q.get("multi_select"))
+                    answers[q["question"]] = picks if multi else picks[0]
+                _step(i + 1)
+
+            self.push_screen(QuestionScreen(questions[i], index=i, total=len(questions)), _done)
+
+        _step(0)
+
+    def _answer_question(self, ev: Event, answers: dict) -> None:
+        sid, rid = self._sid, ev.control_request_id
+        log = self.query_one("#transcript", RichLog)
+        summary = ", ".join(f"{v}" for v in answers.values()) if answers else "dismissed"
+        log.write(f"[dim]  ↳ answered: {escape(summary)}[/dim]")
+
+        def _send() -> None:
+            try:
+                self._rc.answer_question(
+                    sid, rid, answers, ev.tool_input, tool_use_id=ev.tool_use_id
+                )
+            except (APIError, CredentialsError, OSError) as exc:
+                self.call_from_thread(self.notify, f"answer failed: {exc}", severity="error")
+
+        self.run_worker(_send, thread=True, group="control")
 
     def _answer(self, ev: Event, allow: bool, always: bool, message: str) -> None:
         sid, rid = self._sid, ev.control_request_id
@@ -389,6 +536,7 @@ class RemoteControlTUI(App):
                     updated_input=ev.tool_input if allow else None,
                     updated_permissions=ev.permission_suggestions if allow and always else None,
                     message=message,
+                    tool_use_id=ev.tool_use_id,
                 )
             except (APIError, CredentialsError, OSError) as exc:
                 self.call_from_thread(self.notify, f"answer failed: {exc}", severity="error")
