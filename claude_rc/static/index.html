@@ -450,7 +450,16 @@ function eventNode(ev) {
     expireOpenApprovals();
     frag.appendChild(resultDivider(ev));
   } else if (ev.type === "rate_limit_event") {
-    frag.appendChild(el("div", "attention", "⏳ rate limited"));
+    // a status pulse, not an error — only surface a real warning / rejection
+    const rl = ev.rate_limit || {};
+    if (rl.level === "reached") {
+      frag.appendChild(el("div", "attention", "⏳ usage limit reached" +
+        (typeof rl.resets_at === "string" ? " · resets " + rl.resets_at : "")));
+    } else if (rl.level === "warning") {
+      frag.appendChild(el("div", "divider", "approaching usage limit"));
+    } else {
+      return null;  // normal pulse — telemetry
+    }
   } else if (ev.is_question && ev.request_id) {
     frag.appendChild(questionCard(ev));
   } else if (ev.is_blocking_control && ev.blocking_subtype === "can_use_tool" && ev.request_id) {

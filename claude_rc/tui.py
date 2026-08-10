@@ -632,7 +632,14 @@ class RemoteControlTUI(App):
         elif ev.type == "result":
             log.write(result_divider(ev))
         elif ev.type == "rate_limit_event":
-            log.write(f"[bold {DANGER}]⏳ rate limited[/]")
+            rl = ev.rate_limit_info() or {}
+            if rl.get("level") == "reached":
+                reset = rl.get("resets_at")
+                tail = f" · resets {reset}" if isinstance(reset, str) else ""
+                log.write(f"[bold {DANGER}]⏳ usage limit reached{escape(tail)}[/]")
+            elif rl.get("level") == "warning":
+                log.write(f"[{MUTED}]⏳ approaching usage limit[/]")
+            # a normal status pulse is telemetry — don't clutter the transcript
         elif ev.is_question:
             first = next(
                 (q.get("question") for q in (ev.tool_input or {}).get("questions") or []
