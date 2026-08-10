@@ -21,12 +21,16 @@ along (`response_shape` unwrapping, newest-slice history, an SSE keep-alive stal
 
 ```bash
 # run the TUI with zero install
-uvx --from "git+https://github.com/fuutott/claude-rc-api[cli,tui]" claude-rc tui
+uvx --from "git+https://github.com/fuutott/claude-rc-api[cli,tui]" fabio
 
 # or install it into a venv / project
 pip install "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
 uv add "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
 ```
+
+The TUI installs a **`fabio`** command (a friendly alias for `claude-rc tui`).
+(Heads-up: an unrelated load balancer also ships a `fabio` binary — if you have
+it installed, one will shadow the other on your `PATH`.)
 
 Prerequisites are unchanged from upstream: log in to Claude Code with a
 claude.ai account (`claude` → `/login`), and have a session to drive
@@ -35,8 +39,9 @@ claude.ai account (`claude` → `/login`), and have a session to drive
 ## TUI
 
 ```bash
-claude-rc tui                    # pick a session from the sidebar
-claude-rc tui cse_abc123         # jump straight into one
+fabio                            # pick a session from the sidebar
+fabio cse_abc123                 # jump straight into one
+# `claude-rc tui [cse_id]` does exactly the same thing
 ```
 
 A full-screen control panel built on [Textual](https://textual.textualize.io/):

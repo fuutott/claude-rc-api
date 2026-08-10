@@ -329,5 +329,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 130
 
 
+def fabio_main(argv: Optional[list[str]] = None) -> int:
+    """Entry point for the ``fabio`` command — a friendly alias that launches the
+    TUI (equivalent to ``claude-rc tui``)."""
+    p = argparse.ArgumentParser(
+        prog="fabio",
+        description="Fabio — a terminal UI for Claude Code Remote Control sessions.",
+    )
+    p.add_argument("session_id", nargs="?", default=None,
+                   help="jump straight into this session (cse_…); omit to pick from the sidebar")
+    p.add_argument("--version", action="version", version=f"fabio {__version__}")
+    args = p.parse_args(argv)
+    try:
+        from .tui import run
+    except ImportError:
+        _print(
+            "Fabio needs the `tui` extra:  pip install 'claude-rc-api[cli,tui]'  "
+            "(or `uv sync --extra tui` in a checkout)"
+        )
+        return 1
+    try:
+        run(session_id=args.session_id)
+    except CredentialsError as e:
+        _print(f"auth error: {e}")
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())
