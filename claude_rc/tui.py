@@ -16,7 +16,8 @@ Run it with::
     claude-rc tui cse_abc123     # jump straight into one
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
-**ctrl+r** refresh sessions · **ctrl+q** quit.
+**ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·
+**ctrl+q** quit.
 
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
@@ -423,6 +424,7 @@ class RemoteControlTUI(App):
         Binding("ctrl+x", "interrupt", "Interrupt"),
         Binding("ctrl+g", "show_approvals", "Approvals"),
         Binding("ctrl+r", "refresh_sessions", "Refresh"),
+        Binding("ctrl+b", "toggle_sidebar", "Sidebar"),
     ]
 
     CSS = """
@@ -766,6 +768,15 @@ class RemoteControlTUI(App):
                 self.call_from_thread(self.notify, f"answer failed: {exc}", severity="error")
 
         self.run_worker(_send, thread=True, group="control")
+
+    def action_toggle_sidebar(self) -> None:
+        """Hide/show the session list so the transcript can take the full width
+        (handy on a narrow terminal / phone). Focus moves to the composer when
+        the list is hidden so keys still land somewhere sensible."""
+        sidebar = self.query_one("#sidebar")
+        sidebar.display = not sidebar.display
+        if not sidebar.display:
+            self.query_one("#composer", Input).focus()
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:

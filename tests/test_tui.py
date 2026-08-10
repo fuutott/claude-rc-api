@@ -367,6 +367,23 @@ def test_sidebar_marks_attached_session():
     asyncio.run(scenario())
 
 
+def test_toggle_sidebar():
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            sidebar = app.query_one("#sidebar")
+            assert sidebar.display is True
+            await pilot.press("ctrl+b")
+            await pilot.pause(0.1)
+            assert sidebar.display is False   # hidden → transcript takes the width
+            await pilot.press("ctrl+b")
+            await pilot.pause(0.1)
+            assert sidebar.display is True
+
+    asyncio.run(scenario())
+
+
 def test_retire_approval_drops_queued_prompt():
     fake = FakeRC()
     app = RemoteControlTUI(client=fake)

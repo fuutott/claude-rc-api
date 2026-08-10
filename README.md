@@ -55,7 +55,8 @@ and a per-turn usage footer (duration · cost · tokens).
 Type in the composer to send a message (slash commands like `/effort high` run
 on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
 `:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
-pending approvals, `ctrl+r` refresh, `ctrl+q` quit.
+pending approvals, `ctrl+r` refresh, `ctrl+b` hide/show the session list,
+`ctrl+q` quit.
 
 **Permission prompts are first-class.** When the agent blocks on a
 `can_use_tool` request, a modal shows the tool name and the **full** tool input
