@@ -112,6 +112,7 @@ def test_transcript_widgets_render_and_select():
             text = _selected_text(app)
             assert "› hi" in text                       # user bar
             assert "Here is code" in text               # assistant markdown prose
+            assert "print('hi')" in text                # fenced code is selectable too
             assert "Bash" in text and "date" in text    # ● Name(arg)
             assert "└" in text and "Mon Aug 10" in text  # tool result + connector
             assert "boom" in text                        # error result
@@ -446,6 +447,42 @@ def test_toggle_sidebar():
             await pilot.press("ctrl+o")
             await pilot.pause(0.1)
             assert sidebar.display is True
+
+    asyncio.run(scenario())
+
+
+def test_composer_grows_and_submits_multiline():
+    """The composer wraps long input and grows (Input scrolled horizontally and
+    rendered black-on-black past the width); ctrl+j inserts a newline; Enter
+    submits the whole thing."""
+    async def scenario():
+        fake = FakeRC()
+        app = RemoteControlTUI(client=fake)
+        async with app.run_test(size=(60, 24)) as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            composer = app.query_one("#composer")
+            composer.focus()
+            await pilot.pause(0.1)
+            h1 = composer.styles.height.value
+            composer.value = "x" * 200  # far wider than the 60-col screen
+            await pilot.pause(0.2)
+            assert composer.styles.height.value > h1, "composer must grow when text wraps"
+            # capped, not unbounded
+            composer.value = "y" * 5000
+            await pilot.pause(0.2)
+            assert composer.styles.height.value <= composer.MAX_LINES + 2
+
+            # ctrl+j = newline, enter = submit the multi-line message intact
+            composer.value = "line one"
+            await pilot.press("end", "ctrl+j")
+            await pilot.pause(0.1)
+            for ch in "two":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert fake.calls[-1] == ("send", "cse_1", "line one\ntwo")
+            assert composer.value == ""  # cleared after send
 
     asyncio.run(scenario())
 
