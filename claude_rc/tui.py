@@ -20,6 +20,10 @@ Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·
 **ctrl+q** quit.
 
+Select text by dragging over the transcript, then **⌘C / Ctrl+C** to copy it to
+the system clipboard (via ``pbcopy`` / ``wl-copy`` / ``xclip``, or OSC 52 when
+running remotely).
+
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
 
@@ -35,6 +39,8 @@ Requires the ``tui`` extra (``pip install "claude-rc-api[tui]"``).
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import threading
 from collections import deque
 from typing import Optional
@@ -778,6 +784,32 @@ class RemoteControlTUI(App):
                 self.call_from_thread(self.notify, f"answer failed: {exc}", severity="error")
 
         self.run_worker(_send, thread=True, group="control")
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy selected text to the system clipboard.
+
+        Overrides Textual's default, which uses OSC 52 — that does not reach the
+        clipboard on macOS Terminal (and needs opt-in on some others), so a
+        drag-select + ⌘C/Ctrl+C silently failed there. Prefer a local clipboard
+        tool (``pbcopy`` / ``wl-copy`` / ``xclip`` / ``xsel``); fall back to
+        OSC 52 only when none exists (e.g. a remote/SSH session)."""
+        tools = {
+            "pbcopy": [],
+            "wl-copy": [],
+            "xclip": ["-selection", "clipboard"],
+            "xsel": ["--clipboard", "--input"],
+        }
+        for tool, args in tools.items():
+            exe = shutil.which(tool)
+            if not exe:
+                continue
+            try:
+                subprocess.run([exe, *args], input=text, text=True, timeout=10)
+                self.notify(f"copied {len(text)} chars to clipboard")
+                return
+            except (OSError, subprocess.SubprocessError):
+                continue
+        super().copy_to_clipboard(text)  # OSC 52 fallback (SSH / remote terminals)
 
     def action_toggle_sidebar(self) -> None:
         """Hide/show the session list so the transcript can take the full width
