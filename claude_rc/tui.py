@@ -184,14 +184,11 @@ def _result_text(block: dict) -> tuple[str, bool]:
     return "".join(parts), is_error
 
 
-def thinking_block(text: str, max_lines: int = 30) -> Table:
-    """Extended thinking, recessed: a ``✻`` gutter with the text dim + italic,
-    capped so a long chain of thought doesn't flood the transcript."""
-    lines = text.strip().splitlines() or [""]
-    extra = len(lines) - max_lines
-    body = Text("\n".join(lines[:max_lines]), style="italic dim")
-    if extra > 0:
-        body.append(f"\n… +{extra} more line{'s' if extra != 1 else ''}", style=MUTED)
+def thinking_block(text: str) -> Table:
+    """Extended thinking, recessed but rendered in full: a ``✻`` gutter with the
+    text dim + italic. Never truncated — the reasoning is how you confirm you're
+    on the same page — it just flows into the scrollback."""
+    body = Text(text.strip(), style="italic dim")
     grid = Table.grid(expand=True)
     grid.add_column(width=2, no_wrap=True)
     grid.add_column(ratio=1)

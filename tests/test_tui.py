@@ -125,10 +125,10 @@ def test_thinking_todos_and_usage_renderables():
             console.print(obj)
         return cap.get()
 
-    # thinking: recessed, capped
+    # thinking: recessed but rendered in full (never truncated)
     assert "reasoning" in render(thinking_block("some reasoning here"))
-    capped = render(thinking_block("\n".join(str(i) for i in range(50)), max_lines=10))
-    assert "more line" in capped
+    full = render(thinking_block("\n".join(f"line{i}" for i in range(50))))
+    assert "line0" in full and "line49" in full and "more line" not in full
 
     # TodoWrite dispatches to a checklist with status marks
     todos = {"todos": [
