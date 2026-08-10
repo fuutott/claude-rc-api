@@ -3,25 +3,21 @@
 This is a personal fork of
 [ThatCrispyToast/claude-rc-api](https://github.com/ThatCrispyToast/claude-rc-api)
 that adds **`claude-rc tui`** — a full-screen terminal control panel for your
-Claude Code Remote Control sessions (the claude.ai/code web page, but in your
-terminal): session sidebar, live transcript that renders the way the Claude
-Code CLI does (Markdown, syntax-highlighted code, tool calls with their output,
-thinking, todo checklists), a composer, steering commands, and first-class
-permission prompts — approve/deny tool calls (with the **full** tool input
-shown, never a clipped command) and answer AskUserQuestion prompts with option
-pickers.
+Claude Code Remote Control sessions: the claude.ai/code web page, but in your
+terminal. Everything below the preamble is the upstream README, unchanged; this
+section covers only what the fork adds.
 
 **Caveats:** these are the same unofficial, private endpoints the upstream
-project reverse-engineered (see the ⚠️ note below) — they can change or break at
-any time. The permission-*answer* path this fork adds is validated against the
-live-tested implementation in
+project reverse-engineered (see the ⚠️ note in the original readme below) — they
+can change or break at any time. The permission-*answer* path this fork adds is
+validated against the live-tested implementation in
 [g2-claude-remote](https://github.com/ThatCrispyToast/g2-claude-remote) but has
 not been exercised against a live worker from this fork itself; `updatedPermissions`
 ("always allow") and the true-dialog answer shape remain unconfirmed (flagged in
-[`API_REFERENCE.md`](./API_REFERENCE.md) §3.2). A few upstream fixes ride along
-(`response_shape` unwrapping, newest-slice history, an SSE keep-alive stall).
+[`API_REFERENCE.md`](./API_REFERENCE.md) §3.2). A few upstream-side fixes ride
+along (`response_shape` unwrapping, newest-slice history, an SSE keep-alive stall).
 
-Install **from this fork**:
+## Install (from this fork)
 
 ```bash
 # run the TUI with zero install
@@ -30,18 +26,52 @@ uvx --from "git+https://github.com/fuutott/claude-rc-api[cli,tui]" claude-rc tui
 # or install it into a venv / project
 pip install "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
 uv add "claude-rc-api[cli,tui] @ git+https://github.com/fuutott/claude-rc-api"
-
-# then
-claude-rc tui                    # pick a session from the sidebar
-claude-rc tui cse_abc123         # jump straight into one
 ```
 
 Prerequisites are unchanged from upstream: log in to Claude Code with a
 claude.ai account (`claude` → `/login`), and have a session to drive
-(`claude remote-control` in some project). Full TUI docs are in the
-[TUI section](#tui) below.
+(`claude remote-control` in some project).
 
-Below is the original readme.
+## TUI
+
+```bash
+claude-rc tui                    # pick a session from the sidebar
+claude-rc tui cse_abc123         # jump straight into one
+```
+
+A full-screen control panel built on [Textual](https://textual.textualize.io/):
+a session sidebar (status dots — green idle · yellow running · red waiting on
+you), a live transcript, and a composer. Selecting a session loads its history
+and follows the live stream; the sidebar marks the attached session distinctly
+from the cursor row.
+
+The transcript renders the way the Claude Code CLI does, in this fork's colour
+scheme: user turns on a chevron bar, assistant turns as Markdown (syntax-
+highlighted code fences, lists, inline code), tool calls as `● Name(arg)` with
+their output hanging below on a `└` connector, extended **thinking** shown in
+full (recessed, never truncated), **TodoWrite** as a live `✔ / ◐ / ☐` checklist,
+and a per-turn usage footer (duration · cost · tokens).
+
+Type in the composer to send a message (slash commands like `/effort high` run
+on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
+`:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
+pending approvals, `ctrl+r` refresh, `ctrl+q` quit.
+
+**Permission prompts are first-class.** When the agent blocks on a
+`can_use_tool` request, a modal shows the tool name and the **full** tool input
+(scrollable, never a clipped command): allow (`a`), always-allow — persisting
+the suggested rule (`y`), or deny with an optional reason (`d`). `esc` defers;
+unanswered prompts queue up (`ctrl+g` brings them back), prompts answered from
+another controller (the web app, your phone) retire automatically, and a turn
+ending abandons stale ones. **AskUserQuestion** prompts get their own flow — the
+questions render as pickable option lists (single- and multi-select), answered
+on the permission path the way the API delivers them.
+
+The `claude-rc web`, `repl`, and `send` surfaces answer permission prompts too.
+
+---
+
+Below is the original upstream readme, unchanged.
 
 ---
 
@@ -92,7 +122,6 @@ For development in a checkout, use [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync --extra cli                 # runtime + pretty CLI
-uv sync --extra cli --extra tui     # + the terminal UI (`claude-rc tui`)
 uv sync --extra cli --extra test    # + pytest
 ```
 
@@ -117,50 +146,15 @@ claude-rc get   <cse_id>         # session details (JSON)
 claude-rc events <cse_id>        # recent history
 claude-rc watch <cse_id>         # stream live (read-only)
 claude-rc send  <cse_id> "run the tests"   # send a message, print the reply
-claude-rc repl  <cse_id>         # interactive chat (answers permission prompts)
-claude-rc tui   [cse_id]         # terminal control panel (needs the `tui` extra)
+claude-rc repl  <cse_id>         # interactive chat
 claude-rc web                    # browser control panel (all sessions)
 ```
-
-## TUI
-
-A full-screen terminal control panel (the web page, but in your terminal),
-built on [Textual](https://textual.textualize.io/):
-
-```bash
-pip install "claude-rc-api[tui] @ git+https://github.com/<you>/claude-rc-api"
-claude-rc tui                    # session sidebar + live transcript + composer
-claude-rc tui cse_abc123         # jump straight into a session
-```
-
-Sessions live in a sidebar with status dots (green idle · yellow running ·
-red waiting on you); selecting one loads history and follows the live stream.
-Type in the composer to send messages (slash commands like `/effort high` run
-on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
-`:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
-pending approvals, `ctrl+r` refresh, `ctrl+q` quit.
-
-**Permission prompts are first-class.** When the agent blocks on a
-`can_use_tool` request, a modal shows the tool name and full input: allow
-(`a`), always-allow — persisting the CLI's suggested rule (`y`), or deny with
-an optional reason (`d`). `esc` defers; unanswered prompts queue up (`ctrl+g`
-brings them back), prompts answered from another controller (the web app,
-your phone) retire automatically, and a turn ending abandons stale ones.
-**AskUserQuestion prompts get their own flow** — the questions render as
-pickable option lists (single- and multi-select), answered on the permission
-path the way the API actually delivers them.
-
-The answer wire format matches the live-validated implementation in
-[`g2-claude-remote`](https://github.com/ThatCrispyToast/g2-claude-remote)
-(the glasses app whose bridge first confirmed it) — see
-[`API_REFERENCE.md`](./API_REFERENCE.md) §3.2.
 
 ## Web UI
 
 A dependency-free browser control panel for your Remote Control sessions: list
-them, watch the live event stream, send messages, answer permission prompts
-(allow / always allow / deny with a reason), and steer (interrupt / set model /
-set permission mode / archive).
+them, watch the live event stream, send messages, and steer (interrupt / set
+model / set permission mode / archive).
 
 ```bash
 claude-rc web                    # serves http://127.0.0.1:8765 and opens it
@@ -207,20 +201,6 @@ rc.interrupt(sid)
 rc.set_model(sid, "claude-opus-4-8")
 rc.set_permission_mode(sid, "acceptEdits")
 rc.set_effort(sid, "high")  # low|medium|high|xhigh, or None = auto
-
-# answer permission prompts (can_use_tool)
-for req in rc.pending_permission_requests(sid):
-    if req.is_question:  # AskUserQuestion rides in as a can_use_tool prompt
-        rc.answer_question(sid, req.control_request_id,
-                           {"Which db?": "postgres"}, req.tool_input,
-                           tool_use_id=req.tool_use_id)
-        continue
-    print(req.tool_name, req.tool_input)
-    rc.answer_permission(sid, req.control_request_id, allow=True,
-                         updated_input=req.tool_input,
-                         tool_use_id=req.tool_use_id)
-    # deny instead: allow=False, message="use the sandbox for that"
-    # "always allow": updated_permissions=req.permission_suggestions
 ```
 
 Cloud (Managed Agents) mode:
@@ -284,7 +264,6 @@ claude_rc/
   events.py        # Event model + builders for both wire formats
   sse.py           # dependency-free SSE parser
   cli.py           # `claude-rc` command line
-  tui.py           # `claude-rc tui` — Textual terminal control panel
   webui.py         # `claude-rc web` — stdlib http.server control panel
   static/          # the web UI single-page app
 API_REFERENCE.md   # full reverse-engineered protocol reference
