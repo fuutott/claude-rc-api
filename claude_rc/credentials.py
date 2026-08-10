@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,12 +110,45 @@ class OAuthCredentials:
         return block
 
 
+# The Keychain service name the Claude Code CLI stores its credentials under on
+# macOS (where it uses the login Keychain instead of a credentials file).
+MACOS_KEYCHAIN_SERVICES = ("Claude Code-credentials", "Claude Code")
+
+
+def _load_macos_keychain() -> Optional[dict]:
+    """Read Claude Code's credentials JSON from the macOS login Keychain.
+
+    On macOS the CLI stores the ``claudeAiOauth`` block in the Keychain, not in
+    ``~/.claude/.credentials.json``. Retrieve it with ``security``; the first
+    read from a new binary (this one, not `claude`) may pop a Keychain
+    permission dialog — click Allow. Returns the parsed JSON, or ``None`` if
+    not on macOS / not found / unreadable."""
+    if sys.platform != "darwin":
+        return None
+    for service in MACOS_KEYCHAIN_SERVICES:
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", service, "-w"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        blob = (proc.stdout or "").strip()
+        if proc.returncode == 0 and blob:
+            try:
+                return json.loads(blob)
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def load_credentials(path: os.PathLike | str | None = None) -> OAuthCredentials:
     """Load OAuth credentials.
 
     Priority:
       1. ``CLAUDE_RC_ACCESS_TOKEN`` env var (no refresh possible).
       2. ``~/.claude/.credentials.json`` (``claudeAiOauth`` block).
+      3. macOS login Keychain (where the CLI stores them on macOS).
     """
     env_token = os.environ.get(ENV_ACCESS_TOKEN) or os.environ.get(ENV_CLI_OAUTH_TOKEN)
     if env_token:
@@ -121,9 +156,22 @@ def load_credentials(path: os.PathLike | str | None = None) -> OAuthCredentials:
 
     p = Path(path) if path else DEFAULT_CREDENTIALS_PATH
     if not p.exists():
+        # macOS: the CLI keeps credentials in the Keychain, not a file.
+        data = _load_macos_keychain()
+        if data:
+            block = data.get("claudeAiOauth") or (data if data.get("accessToken") else None)
+            if block:
+                # source_path=None: we can't safely write refreshed tokens back to
+                # the Keychain, and the CLI keeps that copy fresh anyway.
+                return OAuthCredentials.from_block(
+                    block, source_path=None,
+                    trusted_device_token=data.get("trustedDeviceToken"),
+                )
         raise CredentialsError(
-            f"credentials file not found at {p}. Run `claude` and `/login` first, "
-            f"or set {ENV_ACCESS_TOKEN}."
+            f"credentials not found: no file at {p}"
+            + (", and nothing in the macOS Keychain" if sys.platform == "darwin" else "")
+            + f". Run `claude` and `/login` first, or set {ENV_ACCESS_TOKEN} "
+            f"(e.g. from `claude setup-token`)."
         )
     try:
         data = json.loads(p.read_text())
