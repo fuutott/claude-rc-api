@@ -91,9 +91,17 @@ def test_transcript_renderables():
             console.print(obj)
         return cap.get()
 
-    # user bar: chevron + the text, padded across the width
-    bar = render(user_bar("hello there", 60))
-    assert "› hello there" in bar
+    # user bar: chevron + text, on a background that fills the full width even
+    # for a short message, with a blank line above and below
+    narrow = Console(width=40)
+    with narrow.capture() as cap:
+        narrow.print(user_bar("hi"))
+    bar_out = cap.get()
+    assert "› hi" in bar_out
+    body_lines = [ln for ln in bar_out.split("\n") if "hi" in ln]
+    assert body_lines and len(body_lines[0]) == 40, "bar background must fill the full width"
+    # blank line above and below (Group wraps the bar in empty lines)
+    assert bar_out.startswith("\n") or bar_out.split("\n")[0].strip() == ""
 
     # assistant body renders markdown — a fenced code block keeps its content
     md = render(assistant_body("Here is code:\n\n```python\nprint('hi')\n```"))

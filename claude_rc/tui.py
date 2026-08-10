@@ -36,8 +36,10 @@ import json
 from collections import deque
 from typing import Optional
 
+from rich.console import Group
 from rich.markdown import Markdown
 from rich.markup import escape
+from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -72,7 +74,7 @@ GREEN = "#4fd18b"    # tool-call bullet
 BLUE = "#4f8cff"     # user chevron
 MUTED = "#8b93a7"    # dividers, connectors
 DANGER = "#e0555a"   # tool errors
-USER_BG = "#1b2740"  # the user-message bar
+USER_BG = "#24406b"  # the user-message bar (bright enough to stand out)
 
 
 def _status_dot(session: dict) -> str:
@@ -122,25 +124,18 @@ def _arg_preview(value, limit: int = 120) -> str:
 
 
 # --- transcript renderables (claude.ai/code look, our palette) --------------
-def user_bar(text: str, width: int) -> Text:
-    """A user turn: the message on a full-width tinted bar with a ``›`` chevron,
-    the way the Claude Code CLI shows what you typed."""
-    width = max(width, 8)
-    out = Text()
-    lines = text.split("\n") or [""]
-    for i, line in enumerate(lines):
-        prefix = "› " if i == 0 else "  "
-        seg = Text(f"{prefix}{line}")
-        pad = width - seg.cell_len
-        if pad > 0:
-            seg.append(" " * pad)
-        seg.stylize(f"on {USER_BG}")
-        if i == 0:
-            seg.stylize(f"bold {BLUE}", 0, 1)  # the chevron
-        out.append_text(seg)
-        if i < len(lines) - 1:
-            out.append("\n")
-    return out
+def user_bar(text: str, width: int | None = None) -> Group:
+    """A user turn: the message on a full-width tinted bar with a ``›`` chevron
+    and a blank line above and below, the way the Claude Code CLI stands out
+    what you typed. ``Padding`` fills every line's background to the full width —
+    including wrapped continuation lines and short messages — so the bar is
+    always a solid block, never ragged. ``width`` is accepted for call-site
+    compatibility but ignored (the bar expands to the log's width)."""
+    body = Text()
+    body.append("› ", style=f"bold {BLUE}")
+    body.append(text, style="bold")
+    bar = Padding(body, (0, 1), style=f"on {USER_BG}", expand=True)
+    return Group(Text(""), bar, Text(""))
 
 
 def assistant_body(text: str) -> Table:
@@ -620,7 +615,7 @@ class RemoteControlTUI(App):
                 for block in results:
                     log.write(tool_result_block(block))
             elif text:
-                log.write(user_bar(text, log.size.width or 80))
+                log.write(user_bar(text))
         elif ev.role == "assistant":
             think = ev.thinking().strip()
             if think:
