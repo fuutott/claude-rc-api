@@ -63,17 +63,19 @@ on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
 pending approvals, `ctrl+r` refresh, `ctrl+o` hide/show the session list,
 `ctrl+q` quit.
 
-**Selecting & copying text.** Drag over the transcript to select, then
-**`ctrl+c`** to copy — no modes, no tricks. The transcript is a scroll of real
-widgets (not a `RichLog`, which rasterises its text away), so Textual's own
-selection works on it in-app: a drag only selects the widgets between its
-endpoints — never the sidebar beside them — and mouse scrolling keeps working
-throughout. Copies go through `pbcopy` / `wl-copy` / `xclip`, falling back to
-OSC 52 for remote/SSH sessions (Textual's default OSC 52 alone doesn't reach
-the clipboard on macOS Terminal, which is why a local tool is preferred). The
-widget transcript also reflows properly on resizes and sidebar toggles.
-`claude-rc events <cse_id>` still prints a session's history as plain text
-from outside the app.
+**Selecting & copying text.** Drag over the transcript to select — **the
+selection is copied the moment you release the drag** (copy-on-select, like
+iTerm's own default), and **`ctrl+c`** copies explicitly too. No modes, no
+tricks. On a Mac, note that ⌘C never reaches a TUI — the terminal keeps the
+⌘ key for itself — but with copy-on-select it doesn't matter: drag, then ⌘V
+wherever (a stray ⌘C is a harmless no-op). The transcript is a scroll of
+real widgets (not a `RichLog`, which rasterises its text away), so Textual's
+own selection works on it in-app: a drag only selects the widgets between
+its endpoints — never the sidebar beside them — and mouse scrolling keeps
+working throughout. Copies go through `pbcopy` / `wl-copy` / `xclip`,
+falling back to OSC 52 for remote/SSH sessions. The widget transcript also
+reflows properly on resizes and sidebar toggles. `claude-rc events <cse_id>`
+still prints a session's history as plain text from outside the app.
 
 **Permission prompts are first-class.** When the agent blocks on a
 `can_use_tool` request, a modal shows the tool name and the **full** tool input
