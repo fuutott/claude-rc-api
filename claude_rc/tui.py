@@ -69,6 +69,24 @@ def _status_dot(session: dict) -> str:
     return "[green]●[/green]"
 
 
+# Reviewing a permission means seeing EVERYTHING the tool would do — silent
+# truncation here is how you approve an `rm` you never saw. The full input is
+# always rendered (scrollable); this cap only guards against pathological
+# multi-megabyte inputs, and hitting it is announced, never silent.
+_FULL_INPUT_CAP = 200_000
+
+
+def format_full_input(value) -> str:
+    """The complete tool input, pretty-printed, with an explicit truncation
+    notice on the (rare) input that exceeds the safety cap."""
+    text = value if isinstance(value, str) else json.dumps(value, indent=2, default=str)
+    text = text or ""
+    if len(text) > _FULL_INPUT_CAP:
+        omitted = len(text) - _FULL_INPUT_CAP
+        text = text[:_FULL_INPUT_CAP] + f"\n… ⚠ TRUNCATED: {omitted:,} more characters not shown"
+    return text
+
+
 def _arg_preview(value, limit: int = 120) -> str:
     if value is None:
         return ""
@@ -121,12 +139,10 @@ class ApprovalScreen(ModalScreen[tuple]):
     def compose(self) -> ComposeResult:
         ev = self.event
         tail = f"  (+{self.remaining} more waiting)" if self.remaining else ""
-        pretty = ev.tool_input
-        pretty = pretty if isinstance(pretty, str) else json.dumps(pretty, indent=2, default=str)
         with Container():
             yield Label(f"🔐 Permission: {ev.tool_name or 'tool'}{tail}", classes="title")
             with VerticalScroll():
-                yield Static(escape((pretty or "")[:4000]), classes="input-json")
+                yield Static(escape(format_full_input(ev.tool_input)), classes="input-json")
             yield Input(placeholder="deny reason, shown to Claude (optional)", id="deny-message")
             with Horizontal():
                 yield Button("Allow (a)", variant="success", id="allow")

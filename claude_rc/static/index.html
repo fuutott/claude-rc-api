@@ -136,7 +136,8 @@
     border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; }
   .approval .head { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--warn); }
   .approval .req-input { font-family: var(--mono); font-size: 12px; color: #d9c48a;
-    white-space: pre-wrap; word-break: break-all; margin: 8px 0; max-height: 200px; overflow-y: auto; }
+    white-space: pre-wrap; word-break: break-all; margin: 8px 0; max-height: 45vh; overflow-y: auto;
+    background: #1a1710; border: 1px solid #2e2a1c; border-radius: 6px; padding: 6px 8px; }
   .approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .approval button.allow { background: #1d3324; border-color: #2f5a3c; color: #9fe0b4; }
   .approval button.allow:hover:not(:disabled) { background: #254531; }
@@ -457,9 +458,17 @@ function approvalCard(ev) {
   head.appendChild(el("span", "mono", ev.tool_name || "tool"));
   card.appendChild(head);
   if (ev.tool_input != null) {
-    const pretty = typeof ev.tool_input === "string"
+    // Show the FULL input (scrollable) — a permission review must never hide
+    // part of the command. Only a pathological multi-hundred-KB input is
+    // clipped, and loudly.
+    let pretty = typeof ev.tool_input === "string"
       ? ev.tool_input : JSON.stringify(ev.tool_input, null, 2);
-    card.appendChild(el("div", "req-input", pretty.length > 2000 ? pretty.slice(0, 2000) + "…" : pretty));
+    const CAP = 200000;
+    if (pretty.length > CAP) {
+      pretty = pretty.slice(0, CAP)
+        + `\n… ⚠ TRUNCATED: ${(pretty.length - CAP).toLocaleString()} more characters not shown`;
+    }
+    card.appendChild(el("div", "req-input", pretty));
   }
   const actions = el("div", "actions");
   const mk = (cls, label, fn) => {

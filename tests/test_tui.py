@@ -207,6 +207,40 @@ def test_tui_question_flow():
     asyncio.run(scenario())
 
 
+def test_approval_modal_shows_full_command():
+    """The whole point of the prompt: no silent truncation of the tool input.
+
+    (The mobile app clips the command; the modal here must show all of it.)
+    """
+    from textual.widgets import Static
+    from claude_rc.tui import format_full_input
+
+    # a long-but-realistic command: far over the old 4000-char clip
+    command = "git commit -m " + "x" * 8000 + " && echo SENTINEL_END"
+    ev = Event.from_wire({"sequence_num": 7, "payload": {
+        "type": "control_request", "request_id": "req-long",
+        "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                    "input": {"command": command}}}})
+
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            app._enqueue_approval(ev)
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ApprovalScreen)
+            body = str(app.screen.query_one(".input-json", Static).content)
+            assert "SENTINEL_END" in body            # the tail survived
+            assert "TRUNCATED" not in body           # nothing was clipped
+
+    asyncio.run(scenario())
+
+    # the safety cap announces itself instead of clipping silently
+    huge = format_full_input({"command": "y" * 300_000})
+    assert "⚠ TRUNCATED" in huge and "more characters not shown" in huge
+
+
 def test_retire_approval_drops_queued_prompt():
     fake = FakeRC()
     app = RemoteControlTUI(client=fake)

@@ -186,10 +186,17 @@ def _handle_blocking(rc: RemoteControlClient, sid: str, last) -> None:
                 tool_use_id=last.tool_use_id,
             )
         else:
+            # Print the FULL input — approving a command you only saw part of
+            # defeats the point of the prompt. Only a pathological input is
+            # clipped, with an explicit notice.
             pretty = last.tool_input
             pretty = pretty if isinstance(pretty, str) else json.dumps(pretty, indent=2, default=str)
+            pretty = pretty or ""
+            if len(pretty) > 200_000:
+                omitted = len(pretty) - 200_000
+                pretty = pretty[:200_000] + f"\n… ⚠ TRUNCATED: {omitted:,} more characters not shown"
             _print(f"🔐 permission: {last.tool_name or 'tool'}")
-            for line in (pretty or "").splitlines()[:20]:
+            for line in pretty.splitlines():
                 _print(f"   {line}")
             try:
                 answer = input("allow? [y]es / [n]o / anything else = deny with that reason: ").strip()
