@@ -241,6 +241,28 @@ def test_approval_modal_shows_full_command():
     assert "⚠ TRUNCATED" in huge and "more characters not shown" in huge
 
 
+def test_sidebar_marks_attached_session():
+    from textual.widgets import ListItem
+
+    async def scenario():
+        fake = FakeRC()
+        app = RemoteControlTUI(client=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)  # session list loads
+            app._select_session("cse_1")
+            await pilot.pause(0.2)
+            marked = [i for i in app.query(ListItem) if i.has_class("attached")]
+            assert len(marked) == 1
+            assert marked[0].session_id == "cse_1"
+            # a later list refresh must keep the mark
+            app._render_sessions(fake.sessions())
+            await pilot.pause(0.1)
+            marked = [i for i in app.query(ListItem) if i.has_class("attached")]
+            assert len(marked) == 1 and marked[0].session_id == "cse_1"
+
+    asyncio.run(scenario())
+
+
 def test_retire_approval_drops_queued_prompt():
     fake = FakeRC()
     app = RemoteControlTUI(client=fake)

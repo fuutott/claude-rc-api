@@ -251,8 +251,21 @@ class RemoteControlTUI(App):
     ]
 
     CSS = """
+    /* Thin-line scrollbars everywhere (the 2-cell default reads heavy). */
+    * { scrollbar-size-vertical: 1; scrollbar-size-horizontal: 1; }
+
     #sidebar { width: 38; border-right: solid $panel; }
     #sidebar ListView { background: transparent; }
+
+    /* The sidebar needs two visible states: the cursor row (browsing) and the
+       ATTACHED session (the one the transcript shows). Subtle backgrounds —
+       enough to orient, not enough to shout. */
+    #session-list > ListItem { padding: 0 1; }
+    #session-list > ListItem.-highlight { background: $boost; }
+    #session-list:focus > ListItem.-highlight { background: $accent 25%; }
+    #session-list > ListItem.attached { background: $accent 15%; }
+    #session-list > ListItem.attached.-highlight { background: $accent 30%; }
+
     #transcript { padding: 0 1; }
     #composer { dock: bottom; }
     """
@@ -318,6 +331,8 @@ class RemoteControlTUI(App):
             )
             item = ListItem(label)
             item.session_id = s.get("id")
+            if s.get("id") == selected:
+                item.add_class("attached")
             lv.append(item)
         if self._initial_sid:
             sid, self._initial_sid = self._initial_sid, None
@@ -337,6 +352,8 @@ class RemoteControlTUI(App):
     def _select_session(self, sid: str) -> None:
         self._close_stream()
         self._sid = sid
+        for item in self.query_one("#session-list", ListView).query(ListItem):
+            item.set_class(getattr(item, "session_id", None) == sid, "attached")
         self._approvals.clear()
         self._answered.clear()
         log = self.query_one("#transcript", RichLog)
