@@ -210,6 +210,40 @@ The remote-control REPL worker's full `control_request` dispatch table (2.1.187 
 `mcp_oauth_callback_url`, `mcp_reconnect`, `interrupt` — anything else gets the
 "does not handle" error response.
 
+**Answering a permission prompt (`can_use_tool`)** — the worker blocks a turn by
+emitting a `control_request` on the stream:
+
+```json
+{ "type": "control_request", "request_id": "req_...",
+  "request": { "subtype": "can_use_tool", "tool_name": "Bash",
+               "input": { "command": "rm -rf build" },
+               "permission_suggestions": [ { /* PermissionUpdate */ } ] } }
+```
+
+The controller answers by POSTing a `control_response` event back through the
+same `…/events` ingest. This is the Claude Code stream-json control protocol
+(the remote-control bridge relays it verbatim between worker and controller);
+the response shape is the SDK's `PermissionResult`:
+
+```json
+{ "type": "control_response",
+  "response": { "subtype": "success", "request_id": "req_...",
+    "response": { "behavior": "allow", "updatedInput": { "command": "rm -rf build" } } } }
+```
+
+- **allow** — echo the request's `input` as `updatedInput` (a modified value
+  rewrites the tool call). Add `updatedPermissions` (typically the request's own
+  `permission_suggestions`) to persist an "always allow" rule.
+- **deny** — `{"behavior": "deny", "message": "shown to the model", "interrupt": false}`.
+- An error envelope (`{"subtype": "error", "request_id", "error"}`) refuses the
+  request outright.
+
+A `result` event ending the turn abandons any unanswered prompt — treat older
+prompts as stale. Wrapped by `RemoteControlClient.answer_permission()` /
+`respond_control()` / `pending_permission_requests()`. ⚠️ Reconstructed from the
+CLI/SDK control protocol; the answer path has not yet been exercised against the
+live API (the request side and the blocking behaviour have).
+
 **Slash commands work as user messages** (confirmed live, 2026-07-17): a `user`
 event whose text is e.g. `/effort high` is executed by the remote-control worker
 as a **local command** — zero cost, `num_turns: 0`, no API call; the transcript

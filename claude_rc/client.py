@@ -36,6 +36,10 @@ from .events import (
     Event,
     cli_user_message,
     cli_control_request,
+    cli_control_response,
+    pending_permissions,
+    permission_allow,
+    permission_deny,
     user_message,
     custom_tool_result,
 )
@@ -342,6 +346,65 @@ class RemoteControlClient:
         command = "ultracode" if ultracode else (effort or "auto")
         ack = self.send_message(session_id, f"/effort {command}")
         return {"via": "command", "ack": ack}
+
+    # -- answering the worker's control requests (permission prompts) ------
+    def respond_control(
+        self,
+        session_id: str,
+        request_id: str,
+        response: dict | None = None,
+        *,
+        error: str | None = None,
+    ) -> dict:
+        """Answer a worker's ``control_request`` with a ``control_response``.
+
+        Generic escape hatch: ``response`` is the subtype-specific result object
+        (for ``can_use_tool`` that's a permission verdict — see
+        :meth:`answer_permission`), ``error`` sends an error envelope instead.
+        """
+        return self.send_events(
+            session_id, [cli_control_response(request_id, response, error=error)]
+        )
+
+    def answer_permission(
+        self,
+        session_id: str,
+        request_id: str,
+        allow: bool,
+        *,
+        updated_input: Any = None,
+        updated_permissions: list | None = None,
+        message: str = "",
+        interrupt: bool = False,
+    ) -> dict:
+        """Answer a ``can_use_tool`` permission prompt (approve or deny a tool call).
+
+        ``request_id`` is the prompt's :attr:`Event.control_request_id`. On allow,
+        pass the request's original ``input`` as ``updated_input`` (mirroring the
+        CLI; a modified value rewrites the tool call) and optionally the request's
+        ``permission_suggestions`` as ``updated_permissions`` for "always allow".
+        On deny, ``message`` is shown to the model and ``interrupt=True`` also
+        stops the turn.
+        """
+        verdict = (
+            permission_allow(updated_input, updated_permissions)
+            if allow
+            else permission_deny(message, interrupt=interrupt)
+        )
+        return self.respond_control(session_id, request_id, verdict)
+
+    def pending_permission_requests(self, session_id: str, *, limit: int = 50) -> list[Event]:
+        """Blocking ``control_request`` events still waiting on an answer.
+
+        Scans the last ``limit`` history events and returns, oldest first,
+        blocking requests (``can_use_tool`` & co.) from the current turn that
+        have no matching ``control_response`` yet. Anything before the last
+        ``result`` is treated as stale — the worker abandons unanswered prompts
+        when the turn ends.
+        """
+        evs = self.list_events(session_id, limit=limit, sort_order="desc")
+        evs.reverse()
+        return pending_permissions(evs)
 
     def wait_control_response(
         self,

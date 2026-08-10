@@ -223,6 +223,102 @@ def test_managed_agents_stream_raises_apierror_on_non_200(monkeypatch):
     ma.close()
 
 
+# --- permission prompts (can_use_tool) --------------------------------------
+def _permission_request(rid="req-1", tool="Bash", seq=10, suggestions=None):
+    req = {"subtype": "can_use_tool", "tool_name": tool, "input": {"command": "ls"}}
+    if suggestions is not None:
+        req["permission_suggestions"] = suggestions
+    return Event.from_wire({"sequence_num": seq, "payload": {
+        "type": "control_request", "request_id": rid, "request": req}})
+
+
+def test_event_permission_accessors():
+    e = _permission_request(suggestions=[{"type": "addRules", "rules": []}])
+    assert e.control_request_id == "req-1"
+    assert e.control_subtype == "can_use_tool"
+    assert e.tool_name == "Bash"
+    assert e.tool_input == {"command": "ls"}
+    assert e.permission_suggestions == [{"type": "addRules", "rules": []}]
+    # control_response side: request_id resolves from the response object
+    r = Event.from_wire({"payload": {"type": "control_response",
+                                     "response": {"subtype": "success", "request_id": "req-1"}}})
+    assert r.control_request_id == "req-1"
+
+
+def test_cli_control_response_shapes():
+    from claude_rc.events import cli_control_response, permission_allow, permission_deny
+
+    ok = cli_control_response("rid-1", permission_allow({"command": "ls"}))
+    assert ok == {"type": "control_response", "response": {
+        "subtype": "success", "request_id": "rid-1",
+        "response": {"behavior": "allow", "updatedInput": {"command": "ls"}}}}
+
+    always = permission_allow({"command": "ls"}, updated_permissions=[{"type": "addRules"}])
+    assert always["updatedPermissions"] == [{"type": "addRules"}]
+
+    deny = cli_control_response("rid-2", permission_deny("not now", interrupt=True))
+    assert deny["response"]["response"] == {"behavior": "deny", "message": "not now", "interrupt": True}
+
+    err = cli_control_response("rid-3", error="boom")
+    assert err["response"] == {"subtype": "error", "request_id": "rid-3", "error": "boom"}
+
+
+def test_answer_permission_wire_format(monkeypatch):
+    rc = _bare_rc()
+    sent = []
+    monkeypatch.setattr(rc, "send_events", lambda sid, evs: sent.append(list(evs)) or {"ok": 1})
+
+    rc.answer_permission("cse_x", "req-1", True, updated_input={"command": "ls"})
+    allow = sent[0][0]
+    assert allow["type"] == "control_response"
+    assert allow["response"]["subtype"] == "success"
+    assert allow["response"]["response"] == {"behavior": "allow", "updatedInput": {"command": "ls"}}
+
+    rc.answer_permission("cse_x", "req-2", False, message="nope")
+    deny = sent[1][0]
+    assert deny["response"]["response"] == {"behavior": "deny", "message": "nope"}
+
+
+def test_pending_permissions_lifecycle():
+    from claude_rc.events import pending_permissions
+
+    answered = Event.from_wire({"sequence_num": 11, "payload": {
+        "type": "control_response",
+        "response": {"subtype": "success", "request_id": "req-1"}}})
+    result = Event.from_wire({"sequence_num": 12, "payload": {"type": "result", "subtype": "success"}})
+
+    # answered → gone; unanswered in the current turn → pending
+    assert pending_permissions([_permission_request("req-1"), answered]) == []
+    still_open = _permission_request("req-2", seq=13)
+    assert pending_permissions([_permission_request("req-1"), answered, still_open]) == [still_open]
+    # a turn boundary abandons everything before it
+    assert pending_permissions([_permission_request("req-1"), result]) == []
+    assert pending_permissions([_permission_request("req-1"), result, still_open]) == [still_open]
+
+
+def test_client_pending_permission_requests(monkeypatch):
+    rc = _bare_rc()
+    # newest-first, as list_events(sort_order="desc") returns
+    history_desc = [_permission_request("req-2", seq=13),
+                    Event.from_wire({"sequence_num": 12, "payload": {"type": "result", "subtype": "success"}}),
+                    _permission_request("req-1", seq=10)]
+    monkeypatch.setattr(rc, "list_events", lambda sid, **kw: list(history_desc))
+    pending = rc.pending_permission_requests("cse_x")
+    assert [e.control_request_id for e in pending] == ["req-2"]
+
+
+# --- webui permission endpoint ----------------------------------------------
+def test_webui_event_to_dict_permission_fields():
+    from claude_rc.webui import event_to_dict
+
+    d = event_to_dict(_permission_request(suggestions=[{"type": "addRules"}]))
+    assert d["is_blocking_control"] and d["blocking_subtype"] == "can_use_tool"
+    assert d["request_id"] == "req-1"
+    assert d["tool_name"] == "Bash"
+    assert d["tool_input"] == {"command": "ls"}
+    assert d["has_suggestions"] is True
+
+
 # --- credentials -----------------------------------------------------------
 def test_load_credentials_from_file(tmp_path: Path):
     p = tmp_path / ".credentials.json"

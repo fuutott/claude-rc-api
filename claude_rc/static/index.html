@@ -131,6 +131,21 @@
   .attention { align-self: center; color: #1a1206; background: var(--warn); font-weight: 600;
     padding: 6px 12px; border-radius: 8px; font-size: 13px; }
 
+  /* ---- permission prompt card ---- */
+  .approval { align-self: stretch; max-width: none; background: #241f14;
+    border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; }
+  .approval .head { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--warn); }
+  .approval .req-input { font-family: var(--mono); font-size: 12px; color: #d9c48a;
+    white-space: pre-wrap; word-break: break-all; margin: 8px 0; max-height: 200px; overflow-y: auto; }
+  .approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .approval button.allow { background: #1d3324; border-color: #2f5a3c; color: #9fe0b4; }
+  .approval button.allow:hover:not(:disabled) { background: #254531; }
+  .approval button.deny { background: #33201f; border-color: #5a2f2f; color: #ffb3b6; }
+  .approval button.deny:hover:not(:disabled) { background: #452726; }
+  .approval.answered { opacity: .55; border-color: var(--border); }
+  .approval.answered .head { color: var(--muted); }
+  .approval .verdict { font-size: 12px; color: var(--muted); }
+
   .composer { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--panel);
     padding: 12px 16px; display: flex; gap: 10px; align-items: flex-end; }
   .composer textarea {
@@ -409,13 +424,70 @@ function eventNode(ev) {
   } else if (ev.type === "system" && ev.subtype === "init") {
     frag.appendChild(el("div", "divider", "session started" + (ev.model ? " · " + ev.model : "")));
   } else if (ev.type === "result") {
+    expireOpenApprovals();
     frag.appendChild(el("div", "divider", "turn complete" + (ev.subtype && ev.subtype !== "success" ? " · " + ev.subtype : "")));
+  } else if (ev.is_blocking_control && ev.blocking_subtype === "can_use_tool" && ev.request_id) {
+    frag.appendChild(approvalCard(ev));
   } else if (ev.is_blocking_control) {
     frag.appendChild(el("div", "attention", "⚠ needs you: " + (ev.blocking_subtype || "input")));
+  } else if (ev.type === "control_response" && ev.request_id) {
+    markAnswered(ev.request_id, null);
+    return null;
   } else {
     return null;
   }
   return frag.childNodes.length ? frag : null;
+}
+function approvalCard(ev) {
+  const card = el("div", "approval");
+  card.dataset.requestId = ev.request_id;
+  const head = el("div", "head");
+  head.appendChild(document.createTextNode("🔐 permission: "));
+  head.appendChild(el("span", "mono", ev.tool_name || "tool"));
+  card.appendChild(head);
+  if (ev.tool_input != null) {
+    const pretty = typeof ev.tool_input === "string"
+      ? ev.tool_input : JSON.stringify(ev.tool_input, null, 2);
+    card.appendChild(el("div", "req-input", pretty.length > 2000 ? pretty.slice(0, 2000) + "…" : pretty));
+  }
+  const actions = el("div", "actions");
+  const mk = (cls, label, fn) => {
+    const b = el("button", cls, label);
+    b.onclick = fn;
+    actions.appendChild(b);
+    return b;
+  };
+  mk("allow", "✓ Allow", () => answerPermission(ev, "allow", false));
+  if (ev.has_suggestions) mk("allow", "✓✓ Always allow", () => answerPermission(ev, "allow", true));
+  mk("deny", "✗ Deny", () => {
+    const message = prompt("Tell Claude why (optional):", "") ;
+    if (message === null) return;              // cancelled
+    answerPermission(ev, "deny", false, message);
+  });
+  card.appendChild(actions);
+  return card;
+}
+async function answerPermission(ev, behavior, always, message) {
+  try {
+    await post(`/api/sessions/${S.selectedId}/permission`,
+               { request_id: ev.request_id, behavior, always: !!always, message: message || "" });
+    markAnswered(ev.request_id, behavior === "allow" ? (always ? "allowed (always)" : "allowed") : "denied");
+  } catch (e) { toast("Answer failed: " + e.message); }
+}
+function expireOpenApprovals() {
+  // A turn boundary abandons any unanswered prompt — retire its buttons.
+  for (const card of document.querySelectorAll(".approval:not(.answered)")) {
+    card.classList.add("answered");
+    const actions = card.querySelector(".actions");
+    if (actions) actions.replaceWith(el("div", "verdict", "expired"));
+  }
+}
+function markAnswered(requestId, verdict) {
+  const card = document.querySelector(`.approval[data-request-id="${CSS.escape(requestId)}"]`);
+  if (!card || card.classList.contains("answered")) return;
+  card.classList.add("answered");
+  const actions = card.querySelector(".actions");
+  if (actions) actions.replaceWith(el("div", "verdict", verdict || "answered"));
 }
 function argPreview(input) {
   if (input == null) return "";

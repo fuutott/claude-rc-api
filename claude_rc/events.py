@@ -78,6 +78,9 @@ MA_TERMINAL = {Recv.SESSION_STATUS_TERMINATED}
 # control_request subtypes that block the turn until the controller answers.
 BLOCKING_CONTROL_SUBTYPES = {"can_use_tool", "request_user_dialog", "side_question"}
 
+# `updatedPermissions` destinations accepted by the CLI (PermissionUpdate).
+PERMISSION_DESTINATIONS = {"userSettings", "projectSettings", "localSettings", "session"}
+
 
 @dataclass
 class Event:
@@ -153,6 +156,42 @@ class Event:
             (self.payload.get("request") or {}).get("subtype") in BLOCKING_CONTROL_SUBTYPES
         )
 
+    # -- control protocol accessors ---------------------------------------
+    @property
+    def control_request(self) -> dict:
+        """The ``request`` object of a ``control_request`` (empty dict otherwise)."""
+        return self.payload.get("request") or {}
+
+    @property
+    def control_request_id(self) -> Optional[str]:
+        """``request_id`` of a ``control_request``, or the ``request_id`` a
+        ``control_response`` answers; ``None`` for other event types."""
+        if self.type == RC.CONTROL_REQUEST:
+            return self.payload.get("request_id")
+        if self.type == RC.CONTROL_RESPONSE:
+            return (self.payload.get("response") or {}).get("request_id")
+        return None
+
+    @property
+    def control_subtype(self) -> Optional[str]:
+        return self.control_request.get("subtype")
+
+    @property
+    def tool_name(self) -> Optional[str]:
+        """Tool name of a ``can_use_tool`` permission request."""
+        return self.control_request.get("tool_name")
+
+    @property
+    def tool_input(self) -> Any:
+        """Tool input of a ``can_use_tool`` permission request."""
+        return self.control_request.get("input")
+
+    @property
+    def permission_suggestions(self) -> list:
+        """``permission_suggestions`` of a ``can_use_tool`` request — ready-made
+        ``updatedPermissions`` entries for "always allow" answers."""
+        return self.control_request.get("permission_suggestions") or []
+
     @classmethod
     def from_wire(cls, obj: dict[str, Any]) -> "Event":
         if isinstance(obj, dict) and isinstance(obj.get("payload"), dict):
@@ -165,6 +204,23 @@ class Event:
         preview = self.text()[:60].replace("\n", " ")
         extra = f" {preview!r}" if preview else ""
         return f"<Event {self.type}{sub}{seq}{extra}>"
+
+
+def pending_permissions(events: list["Event"]) -> list["Event"]:
+    """Blocking control requests still unanswered, given ascending history.
+
+    A turn boundary (``result``) abandons any open prompt, and a
+    ``control_response`` retires the request it names.
+    """
+    pending: dict[str, Event] = {}
+    for ev in events:
+        if ev.is_turn_end:
+            pending.clear()
+        elif ev.is_blocking_control and ev.control_request_id:
+            pending[ev.control_request_id] = ev
+        elif ev.type == RC.CONTROL_RESPONSE and ev.control_request_id:
+            pending.pop(ev.control_request_id, None)
+    return list(pending.values())
 
 
 # --- Outbound builders: Remote Control (CLI stream-json) -------------------
@@ -184,6 +240,54 @@ def cli_control_request(subtype: str, request_id: str, **fields: Any) -> dict:
         "request_id": request_id,
         "request": {"subtype": subtype, **fields},
     }
+
+
+def cli_control_response(
+    request_id: str, response: Optional[dict] = None, *, error: Optional[str] = None
+) -> dict:
+    """A ``control_response`` answering a worker's ``control_request``.
+
+    This is the stream-json control protocol the worker itself speaks (the
+    remote-control bridge relays it verbatim): a ``success`` envelope carries a
+    ``response`` object whose shape depends on the request subtype, an ``error``
+    envelope carries an error string.
+    """
+    if error is not None:
+        return {
+            "type": "control_response",
+            "response": {"subtype": "error", "request_id": request_id, "error": error},
+        }
+    return {
+        "type": "control_response",
+        "response": {"subtype": "success", "request_id": request_id, "response": response or {}},
+    }
+
+
+def permission_allow(
+    updated_input: Any = None, updated_permissions: Optional[list] = None
+) -> dict:
+    """A ``can_use_tool`` allow verdict (the ``response`` for :func:`cli_control_response`).
+
+    ``updated_input`` should normally echo the request's original ``input`` (the
+    CLI sends it back; a modified value rewrites the tool call). Pass the
+    request's ``permission_suggestions`` as ``updated_permissions`` for an
+    "always allow" that persists a rule.
+    """
+    out: dict[str, Any] = {"behavior": "allow"}
+    if updated_input is not None:
+        out["updatedInput"] = updated_input
+    if updated_permissions:
+        out["updatedPermissions"] = updated_permissions
+    return out
+
+
+def permission_deny(message: str = "", *, interrupt: bool = False) -> dict:
+    """A ``can_use_tool`` deny verdict. ``message`` is shown to the model;
+    ``interrupt=True`` also stops the current turn."""
+    out: dict[str, Any] = {"behavior": "deny", "message": message}
+    if interrupt:
+        out["interrupt"] = True
+    return out
 
 
 # --- Outbound builders: Managed Agents -------------------------------------

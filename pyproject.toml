@@ -25,6 +25,9 @@ Issues = "https://github.com/ThatCrispyToast/claude-rc-api/issues"
 [project.optional-dependencies]
 cli = ["rich>=13.0"]
 test = ["pytest>=8.0"]
+tui = [
+    "textual>=1.0",
+]
 
 [project.scripts]
 claude-rc = "claude_rc.cli:main"

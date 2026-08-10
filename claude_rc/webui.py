@@ -29,6 +29,8 @@ HTTP surface (all JSON unless noted):
     GET  /api/sessions/{id}/events?limit=     {"events": [...]} (history, asc)
     GET  /api/sessions/{id}/stream?from_seq=  live events as text/event-stream
     POST /api/sessions/{id}/send              {"text": ...}
+    POST /api/sessions/{id}/permission        {"request_id", "behavior": "allow"|"deny",
+                                               "message"?, "always"?: true}
     POST /api/sessions/{id}/interrupt
     POST /api/sessions/{id}/model             {"model": ...}
     POST /api/sessions/{id}/permission_mode   {"mode": ...}
@@ -59,6 +61,7 @@ _R_SESSION = re.compile(rf"^/api/sessions/{_SID}$")
 _R_EVENTS = re.compile(rf"^/api/sessions/{_SID}/events$")
 _R_STREAM = re.compile(rf"^/api/sessions/{_SID}/stream$")
 _R_SEND = re.compile(rf"^/api/sessions/{_SID}/send$")
+_R_PERMISSION = re.compile(rf"^/api/sessions/{_SID}/permission$")
 _R_INTERRUPT = re.compile(rf"^/api/sessions/{_SID}/interrupt$")
 _R_MODEL = re.compile(rf"^/api/sessions/{_SID}/model$")
 _R_PERM = re.compile(rf"^/api/sessions/{_SID}/permission_mode$")
@@ -70,7 +73,7 @@ def event_to_dict(ev: Event) -> dict:
     """Flatten an :class:`Event` into the JSON shape the UI consumes."""
     blocking_subtype = None
     if ev.type == "control_request":
-        blocking_subtype = (ev.payload.get("request") or {}).get("subtype")
+        blocking_subtype = ev.control_subtype
     return {
         "type": ev.type,
         "subtype": ev.subtype,
@@ -88,6 +91,11 @@ def event_to_dict(ev: Event) -> dict:
         "is_terminal": ev.is_terminal,
         "is_blocking_control": ev.is_blocking_control,
         "blocking_subtype": blocking_subtype,
+        # Control-protocol fields (permission prompts + their answers).
+        "request_id": ev.control_request_id,
+        "tool_name": ev.tool_name,
+        "tool_input": ev.tool_input,
+        "has_suggestions": bool(ev.permission_suggestions),
     }
 
 
@@ -192,6 +200,9 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "empty message"}, status=400)
                 self.rc.send_message(m["sid"], text)
                 return self._json({"ok": True})
+            m = _R_PERMISSION.match(path)
+            if m:
+                return self._answer_permission(m["sid"], body)
             m = _R_INTERRUPT.match(path)
             if m:
                 self.rc.interrupt(m["sid"])
@@ -226,6 +237,36 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(exc)
 
     # -- handlers ----------------------------------------------------------
+    def _answer_permission(self, sid: str, body: dict) -> None:
+        request_id = (body.get("request_id") or "").strip()
+        behavior = (body.get("behavior") or "").strip()
+        if not request_id or behavior not in ("allow", "deny"):
+            return self._json(
+                {"error": "need request_id and behavior: allow|deny"}, status=400
+            )
+        # Recover the original request from history: the allow answer echoes its
+        # input, and "always" allow persists its permission_suggestions.
+        req = next(
+            (
+                ev
+                for ev in self.rc.list_events(sid, limit=100, sort_order="desc")
+                if ev.type == "control_request" and ev.control_request_id == request_id
+            ),
+            None,
+        )
+        self.rc.answer_permission(
+            sid,
+            request_id,
+            behavior == "allow",
+            updated_input=req.tool_input if req else None,
+            updated_permissions=(
+                req.permission_suggestions if req and body.get("always") else None
+            ),
+            message=body.get("message") or "",
+            interrupt=bool(body.get("interrupt")),
+        )
+        return self._json({"ok": True})
+
     def _serve_page(self) -> None:
         try:
             html = _PAGE.read_bytes()

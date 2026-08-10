@@ -7,10 +7,11 @@
     claude-rc watch <session_id>     # stream events live (read-only)
     claude-rc send <session_id> "run the tests"   # send a message, print the reply
     claude-rc repl <session_id>      # interactive chat with a live session
+    claude-rc tui [session_id]       # terminal control panel (needs the `tui` extra)
     claude-rc web                    # browser control panel for all sessions
 
-`send`, `repl`, and `web` steer live sessions — only use them on sessions you
-started with `claude remote-control`.
+`send`, `repl`, `tui`, and `web` steer live sessions — only use them on
+sessions you started with `claude remote-control`.
 """
 
 from __future__ import annotations
@@ -139,8 +140,61 @@ def cmd_repl(args) -> int:
                 return 0
             if not text.strip():
                 continue
-            for e in rc.send_and_collect(args.session_id, text):
+            events = rc.send_and_collect(args.session_id, text)
+            for e in events:
                 _render_event(e)
+            _handle_blocking(rc, args.session_id, events[-1] if events else None)
+
+
+def _handle_blocking(rc: RemoteControlClient, sid: str, last) -> None:
+    """Answer permission prompts interactively, then follow the turn to its end."""
+    import json
+
+    while last is not None and last.is_blocking_control:
+        if last.control_subtype != "can_use_tool" or not last.control_request_id:
+            _print(f"⚠ session blocked on: {last.control_subtype} (answer it elsewhere)")
+            return
+        pretty = last.tool_input
+        pretty = pretty if isinstance(pretty, str) else json.dumps(pretty, indent=2, default=str)
+        _print(f"🔐 permission: {last.tool_name or 'tool'}")
+        for line in (pretty or "").splitlines()[:20]:
+            _print(f"   {line}")
+        try:
+            answer = input("allow? [y]es / [n]o / anything else = deny with that reason: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        allow = answer.lower() in ("y", "yes")
+        rc.answer_permission(
+            sid,
+            last.control_request_id,
+            allow,
+            updated_input=last.tool_input if allow else None,
+            message="" if allow or answer.lower() in ("n", "no") else answer,
+        )
+        # Follow the rest of the turn from where it blocked.
+        start = last.sequence_num or 0
+        last = None
+        for ev in rc.stream_events(sid, from_sequence_num=start, reconnect=False):
+            if (ev.sequence_num or 0) <= start:
+                continue
+            _render_event(ev)
+            if ev.is_turn_end or ev.is_terminal or ev.is_blocking_control:
+                last = ev
+                break
+
+
+def cmd_tui(args) -> int:
+    try:
+        from .tui import run
+    except ImportError:
+        _print(
+            "the TUI needs the `tui` extra:  pip install 'claude-rc-api[tui]'  "
+            "(or `uv sync --extra tui` in a checkout)"
+        )
+        return 1
+    run(session_id=args.session_id)
+    return 0
 
 
 def cmd_web(args) -> int:
@@ -210,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("repl", help="interactive chat with a live session")
     pr.add_argument("session_id")
     pr.set_defaults(func=cmd_repl)
+
+    pt = sub.add_parser("tui", help="terminal control panel (requires the `tui` extra)")
+    pt.add_argument("session_id", nargs="?", default=None)
+    pt.set_defaults(func=cmd_tui)
 
     pweb = sub.add_parser("web", help="launch the browser control panel")
     pweb.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
