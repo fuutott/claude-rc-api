@@ -45,6 +45,7 @@ For development in a checkout, use [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync --extra cli                 # runtime + pretty CLI
+uv sync --extra cli --extra tui     # + the terminal UI (`claude-rc tui`)
 uv sync --extra cli --extra test    # + pytest
 ```
 
@@ -69,15 +70,42 @@ claude-rc get   <cse_id>         # session details (JSON)
 claude-rc events <cse_id>        # recent history
 claude-rc watch <cse_id>         # stream live (read-only)
 claude-rc send  <cse_id> "run the tests"   # send a message, print the reply
-claude-rc repl  <cse_id>         # interactive chat
+claude-rc repl  <cse_id>         # interactive chat (answers permission prompts)
+claude-rc tui   [cse_id]         # terminal control panel (needs the `tui` extra)
 claude-rc web                    # browser control panel (all sessions)
 ```
+
+## TUI
+
+A full-screen terminal control panel (the web page, but in your terminal),
+built on [Textual](https://textual.textualize.io/):
+
+```bash
+pip install "claude-rc-api[tui] @ git+https://github.com/<you>/claude-rc-api"
+claude-rc tui                    # session sidebar + live transcript + composer
+claude-rc tui cse_abc123         # jump straight into a session
+```
+
+Sessions live in a sidebar with status dots (green idle · yellow running ·
+red waiting on you); selecting one loads history and follows the live stream.
+Type in the composer to send messages (slash commands like `/effort high` run
+on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
+`:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
+pending approvals, `ctrl+r` refresh, `ctrl+q` quit.
+
+**Permission prompts are first-class.** When the agent blocks on a
+`can_use_tool` request, a modal shows the tool name and full input: allow
+(`a`), always-allow — persisting the CLI's suggested rule (`y`), or deny with
+an optional reason (`d`). `esc` defers; unanswered prompts queue up (`ctrl+g`
+brings them back), prompts answered from another controller (the web app,
+your phone) retire automatically, and a turn ending abandons stale ones.
 
 ## Web UI
 
 A dependency-free browser control panel for your Remote Control sessions: list
-them, watch the live event stream, send messages, and steer (interrupt / set
-model / set permission mode / archive).
+them, watch the live event stream, send messages, answer permission prompts
+(allow / always allow / deny with a reason), and steer (interrupt / set model /
+set permission mode / archive).
 
 ```bash
 claude-rc web                    # serves http://127.0.0.1:8765 and opens it
@@ -124,6 +152,14 @@ rc.interrupt(sid)
 rc.set_model(sid, "claude-opus-4-8")
 rc.set_permission_mode(sid, "acceptEdits")
 rc.set_effort(sid, "high")  # low|medium|high|xhigh, or None = auto
+
+# answer permission prompts (can_use_tool)
+for req in rc.pending_permission_requests(sid):
+    print(req.tool_name, req.tool_input)
+    rc.answer_permission(sid, req.control_request_id, allow=True,
+                         updated_input=req.tool_input)
+    # deny instead: allow=False, message="use the sandbox for that"
+    # "always allow": updated_permissions=req.permission_suggestions
 ```
 
 Cloud (Managed Agents) mode:
@@ -187,6 +223,7 @@ claude_rc/
   events.py        # Event model + builders for both wire formats
   sse.py           # dependency-free SSE parser
   cli.py           # `claude-rc` command line
+  tui.py           # `claude-rc tui` — Textual terminal control panel
   webui.py         # `claude-rc web` — stdlib http.server control panel
   static/          # the web UI single-page app
 API_REFERENCE.md   # full reverse-engineered protocol reference
