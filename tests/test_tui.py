@@ -423,6 +423,23 @@ def test_toggle_sidebar():
     asyncio.run(scenario())
 
 
+def test_toggle_sidebar_reloads_transcript(monkeypatch):
+    """With a session open, toggling the sidebar reloads it so the transcript
+    re-wraps to the new pane width (RichLog doesn't reflow on its own)."""
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._sid = "cse_1"
+            calls = []
+            monkeypatch.setattr(app, "_select_session", lambda sid: calls.append(sid))
+            await pilot.press("ctrl+b")
+            await pilot.pause(0.1)
+            assert calls == ["cse_1"]
+
+    asyncio.run(scenario())
+
+
 def test_retire_approval_drops_queued_prompt():
     fake = FakeRC()
     app = RemoteControlTUI(client=fake)

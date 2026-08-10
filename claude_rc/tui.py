@@ -824,6 +824,12 @@ class RemoteControlTUI(App):
         sidebar.display = not sidebar.display
         if not sidebar.display:
             self.query_one("#composer", Input).focus()
+        # The transcript caches lines at their write-width and doesn't reflow
+        # when the pane resizes, so toggling the sidebar would leave the old
+        # wrap. Reload the current session (exactly what clicking it does) to
+        # re-render the transcript at the new width.
+        if self._sid:
+            self._select_session(self._sid)
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
