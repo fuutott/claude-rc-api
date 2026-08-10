@@ -141,6 +141,14 @@ class Event:
         """``tool_use`` content blocks (name, input, id)."""
         return [b for b in self._content_blocks() if isinstance(b, dict) and b.get("type") == "tool_use"]
 
+    def tool_results(self) -> list[dict]:
+        """``tool_result`` content blocks (content, tool_use_id, is_error).
+
+        These ride on ``user`` events — the worker echoes each tool's output
+        back as a user turn — so a ``user`` event carrying only these is a tool
+        result, not something you typed."""
+        return [b for b in self._content_blocks() if isinstance(b, dict) and b.get("type") == "tool_result"]
+
     # -- turn/idle detection (RC + MA) ------------------------------------
     @property
     def is_turn_end(self) -> bool:

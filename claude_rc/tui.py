@@ -4,6 +4,12 @@ The terminal equivalent of the claude.ai/code web page: a session sidebar, a
 live transcript, a composer, steering commands, and first-class handling of
 permission prompts (``can_use_tool``) with an approval modal.
 
+The transcript mirrors the Claude Code CLI's own look — user turns on a
+full-width chevron bar, assistant turns as Markdown (syntax-highlighted code
+fences, lists, inline code) beside a ``●`` bullet, and tool calls as
+``● Name(arg)`` with their output hanging below on a ``└`` connector — rendered
+in this project's colour scheme.
+
 Run it with::
 
     claude-rc tui                # pick a session from the sidebar
@@ -30,7 +36,10 @@ import json
 from collections import deque
 from typing import Optional
 
+from rich.markdown import Markdown
 from rich.markup import escape
+from rich.table import Table
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -55,6 +64,15 @@ from .credentials import CredentialsError
 from .events import Event, pending_permissions
 
 _PERM_MODES = ("default", "plan", "acceptEdits", "bypassPermissions")
+
+# Our palette (shared with the web UI's index.html), reused for the transcript
+# so it reads like claude.ai/code but in our colours.
+ACCENT = "#d97757"   # terracotta — assistant turn bullet
+GREEN = "#4fd18b"    # tool-call bullet
+BLUE = "#4f8cff"     # user chevron
+MUTED = "#8b93a7"    # dividers, connectors
+DANGER = "#e0555a"   # tool errors
+USER_BG = "#1b2740"  # the user-message bar
 
 
 def _status_dot(session: dict) -> str:
@@ -101,6 +119,86 @@ def _arg_preview(value, limit: int = 120) -> str:
             text = json.dumps(value)
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+# --- transcript renderables (claude.ai/code look, our palette) --------------
+def user_bar(text: str, width: int) -> Text:
+    """A user turn: the message on a full-width tinted bar with a ``›`` chevron,
+    the way the Claude Code CLI shows what you typed."""
+    width = max(width, 8)
+    out = Text()
+    lines = text.split("\n") or [""]
+    for i, line in enumerate(lines):
+        prefix = "› " if i == 0 else "  "
+        seg = Text(f"{prefix}{line}")
+        pad = width - seg.cell_len
+        if pad > 0:
+            seg.append(" " * pad)
+        seg.stylize(f"on {USER_BG}")
+        if i == 0:
+            seg.stylize(f"bold {BLUE}", 0, 1)  # the chevron
+        out.append_text(seg)
+        if i < len(lines) - 1:
+            out.append("\n")
+    return out
+
+
+def assistant_body(text: str) -> Table:
+    """An assistant turn: a ``●`` bullet in a gutter with the message rendered as
+    Markdown beside it — code fences get syntax highlighting, and lists / bold /
+    inline code render the way they do in the Claude Code CLI."""
+    grid = Table.grid(expand=True)
+    grid.add_column(width=2, no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_row(Text("●", style=f"bold {ACCENT}"), Markdown(text))
+    return grid
+
+
+def tool_call_line(tool: dict) -> Text:
+    """A tool call: ``● Name(arg)`` — green bullet, bold name, dim-parenthesised
+    argument (the command for Bash, the path for file tools, …)."""
+    name = tool.get("name") or "tool"
+    arg = _arg_preview(tool.get("input"), limit=80)
+    line = Text()
+    line.append("● ", style=f"bold {GREEN}")
+    line.append(name, style="bold")
+    if arg:
+        line.append("(", style=MUTED)
+        line.append(arg, style=BLUE)
+        line.append(")", style=MUTED)
+    return line
+
+
+def _result_text(block: dict) -> tuple[str, bool]:
+    """Flatten a ``tool_result`` content block to (text, is_error)."""
+    content = block.get("content")
+    is_error = bool(block.get("is_error"))
+    if isinstance(content, str):
+        return content, is_error
+    parts = []
+    for b in content or []:
+        if isinstance(b, dict) and b.get("type") == "text":
+            parts.append(b.get("text", ""))
+        elif isinstance(b, str):
+            parts.append(b)
+    return "".join(parts), is_error
+
+
+def tool_result_block(block: dict, max_lines: int = 10) -> Text:
+    """A tool result hanging under its call on a ``└`` connector, truncated to
+    ``max_lines`` (errors in red)."""
+    text, is_error = _result_text(block)
+    color = DANGER if is_error else MUTED
+    lines = text.rstrip().splitlines() or ["(no output)"]
+    shown, extra = lines[:max_lines], len(lines) - max_lines
+    out = Text()
+    for i, line in enumerate(shown):
+        out.append("  └ " if i == 0 else "    ", style=MUTED)
+        out.append(line, style=color)
+        out.append("\n")
+    if extra > 0:
+        out.append(f"    … +{extra} more line{'s' if extra != 1 else ''}\n", style=MUTED)
+    return out
 
 
 class ApprovalScreen(ModalScreen[tuple]):
@@ -432,17 +530,20 @@ class RemoteControlTUI(App):
     def _render_event(self, ev: Event) -> None:
         log = self.query_one("#transcript", RichLog)
         text = ev.text().strip()
-        if ev.role == "user" and text:
-            log.write(f"[bold cyan]you[/bold cyan] › {escape(text)}")
+        if ev.role == "user":
+            # A user event carrying tool_result blocks is the worker echoing tool
+            # output back — render it as results, not as something you typed.
+            results = ev.tool_results()
+            if results:
+                for block in results:
+                    log.write(tool_result_block(block))
+            elif text:
+                log.write(user_bar(text, log.size.width or 80))
         elif ev.role == "assistant":
             if text:
-                log.write(f"[bold green]claude[/bold green] › {escape(text)}")
+                log.write(assistant_body(text))
             for tool in ev.tool_uses():
-                preview = _arg_preview(tool.get("input"))
-                log.write(
-                    f"  [yellow]⚙ {escape(tool.get('name') or 'tool')}[/yellow]"
-                    f"[dim]{' ' + escape(preview) if preview else ''}[/dim]"
-                )
+                log.write(tool_call_line(tool))
         elif ev.type == "system" and ev.subtype == "init":
             model = ev.payload.get("model") or "?"
             log.write(f"[dim]── session started · {escape(str(model))} ──[/dim]")
