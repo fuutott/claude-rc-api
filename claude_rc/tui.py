@@ -17,7 +17,7 @@ Run it with::
     claude-rc tui [cse_id]       # the same thing under the main CLI
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
-**ctrl+r** refresh sessions · **ctrl+b** hide/show the session list ·
+**ctrl+r** refresh sessions · **ctrl+o** hide/show the session list ·
 **ctrl+t** toggle select-text mode · **ctrl+q** quit.
 
 To copy transcript text, press **ctrl+t** to enter *select mode*: this hands
@@ -436,7 +436,7 @@ class RemoteControlTUI(App):
         Binding("ctrl+x", "interrupt", "Interrupt"),
         Binding("ctrl+g", "show_approvals", "Approvals"),
         Binding("ctrl+r", "refresh_sessions", "Refresh"),
-        Binding("ctrl+b", "toggle_sidebar", "Sidebar"),
+        Binding("ctrl+o", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+t", "toggle_select", "Select text"),
     ]
 

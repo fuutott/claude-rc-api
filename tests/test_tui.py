@@ -436,10 +436,10 @@ def test_toggle_sidebar():
             await pilot.pause(0.2)
             sidebar = app.query_one("#sidebar")
             assert sidebar.display is True
-            await pilot.press("ctrl+b")
+            await pilot.press("ctrl+o")
             await pilot.pause(0.1)
             assert sidebar.display is False   # hidden → transcript takes the width
-            await pilot.press("ctrl+b")
+            await pilot.press("ctrl+o")
             await pilot.pause(0.1)
             assert sidebar.display is True
 
@@ -457,7 +457,7 @@ def test_toggle_sidebar_rerenders_from_cache(monkeypatch):
             reloaded, rerendered = [], []
             monkeypatch.setattr(app, "_select_session", lambda sid: reloaded.append(sid))
             monkeypatch.setattr(app, "_rerender", lambda: rerendered.append(True))
-            await pilot.press("ctrl+b")
+            await pilot.press("ctrl+o")
             await pilot.pause(0.2)  # let call_after_refresh fire
             assert rerendered and not reloaded  # cache, not API
 

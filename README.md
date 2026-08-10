@@ -60,7 +60,7 @@ and a per-turn usage footer (duration · cost · tokens).
 Type in the composer to send a message (slash commands like `/effort high` run
 on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
 `:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
-pending approvals, `ctrl+r` refresh, `ctrl+b` hide/show the session list,
+pending approvals, `ctrl+r` refresh, `ctrl+o` hide/show the session list,
 `ctrl+t` toggle select-text mode, `ctrl+q` quit.
 
 **Selecting & copying text.** A Textual app captures every mouse event for
