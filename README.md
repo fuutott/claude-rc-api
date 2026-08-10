@@ -61,22 +61,19 @@ Type in the composer to send a message (slash commands like `/effort high` run
 on the worker), or use TUI commands: `:model <id>`, `:perm <mode>`,
 `:interrupt`, `:archive`, `:q`. Keys: `ctrl+x` interrupt, `ctrl+g` review
 pending approvals, `ctrl+r` refresh, `ctrl+o` hide/show the session list,
-`ctrl+t` toggle select-text mode, `ctrl+q` quit.
+`ctrl+q` quit.
 
-**Selecting & copying text.** A Textual app captures every mouse event for
-itself, so you can't drag-select transcript text the way you would in a normal
-terminal (and Shift-drag doesn't reliably escape it either). Press **`ctrl+t`**
-to enter *select mode*: this hands the mouse back to your terminal, so its own
-click-drag selection works over the whole screen — the transcript included —
-and **⌘C / Ctrl+C** copies as usual. The session list is hidden while select
-mode is on (the terminal's selection is screen-wide, so this stops a drag from
-grabbing the sidebar rows too) and restored — along with in-app clicking and
-scrolling — when you press `ctrl+t` again. (Once text is on the clipboard the copy path is your
-terminal's, not Fabio's — so this works the same over SSH.) For in-app copies
-elsewhere, Fabio still overrides Textual's clipboard to use `pbcopy` /
-`wl-copy` / `xclip`, falling back to OSC 52 for remote/SSH sessions.
-`claude-rc events <cse_id>` also prints a session's history as plain text from
-outside the app.
+**Selecting & copying text.** Drag over the transcript to select, then
+**`ctrl+c`** to copy — no modes, no tricks. The transcript is a scroll of real
+widgets (not a `RichLog`, which rasterises its text away), so Textual's own
+selection works on it in-app: a drag only selects the widgets between its
+endpoints — never the sidebar beside them — and mouse scrolling keeps working
+throughout. Copies go through `pbcopy` / `wl-copy` / `xclip`, falling back to
+OSC 52 for remote/SSH sessions (Textual's default OSC 52 alone doesn't reach
+the clipboard on macOS Terminal, which is why a local tool is preferred). The
+widget transcript also reflows properly on resizes and sidebar toggles.
+`claude-rc events <cse_id>` still prints a session's history as plain text
+from outside the app.
 
 **Permission prompts are first-class.** When the agent blocks on a
 `can_use_tool` request, a modal shows the tool name and the **full** tool input

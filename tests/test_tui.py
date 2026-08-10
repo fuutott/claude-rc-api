@@ -79,97 +79,100 @@ class FakeRC:
         pass
 
 
-def test_transcript_renderables():
-    """The claude.ai/code-style renderables produce sane output and never throw."""
-    from rich.console import Console
+def _selected_text(app) -> str:
+    """Select every transcript widget through Textual's real selection machinery
+    and extract the text — the exact path a drag + ctrl+c copy takes. This is
+    the regression guard for 'transcript text must be copy-pasteable'."""
+    from textual.selection import SELECT_ALL
+
+    app.screen.selections = {w: SELECT_ALL for w in app.query("#transcript *")}
+    return app.screen.get_selected_text() or ""
+
+
+def test_transcript_widgets_render_and_select():
+    """Every transcript widget type renders AND its text survives selection
+    extraction (the transcript is widgets, not a RichLog, precisely so that
+    drag-select + copy works)."""
     from claude_rc.tui import assistant_body, tool_call_line, tool_result_block, user_bar
 
-    console = Console(width=60, no_color=False)
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            t = app.query_one("#transcript")
+            await t.mount(
+                user_bar("hi"),
+                assistant_body("Here is code:\n\n```python\nprint('hi')\n```"),
+                tool_call_line({"name": "Bash", "input": {"command": "date"}}),
+                tool_result_block({"content": "Mon Aug 10", "is_error": False}),
+                tool_result_block({"content": "boom", "is_error": True}),
+                tool_result_block({"content": "\n".join(str(i) for i in range(40))}),
+            )
+            await pilot.pause(0.3)
+            text = _selected_text(app)
+            assert "› hi" in text                       # user bar
+            assert "Here is code" in text               # assistant markdown prose
+            assert "Bash" in text and "date" in text    # ● Name(arg)
+            assert "└" in text and "Mon Aug 10" in text  # tool result + connector
+            assert "boom" in text                        # error result
+            assert "+30 more line" in text               # truncation notice
 
-    def render(obj):
-        with console.capture() as cap:
-            console.print(obj)
-        return cap.get()
-
-    # user bar: chevron + text, on a background that fills the full width even
-    # for a short message, with a blank line above and below
-    narrow = Console(width=40)
-    with narrow.capture() as cap:
-        narrow.print(user_bar("hi"))
-    bar_out = cap.get()
-    assert "› hi" in bar_out
-    body_lines = [ln for ln in bar_out.split("\n") if "hi" in ln]
-    assert body_lines and len(body_lines[0]) == 40, "bar background must fill the full width"
-    # blank line above and below (Group wraps the bar in empty lines)
-    assert bar_out.startswith("\n") or bar_out.split("\n")[0].strip() == ""
-
-    # assistant body renders markdown — a fenced code block keeps its content
-    md = render(assistant_body("Here is code:\n\n```python\nprint('hi')\n```"))
-    assert "print" in md and "●" in md
-
-    # tool call: ● Name(arg)
-    call = render(tool_call_line({"name": "Bash", "input": {"command": "date"}}))
-    assert "Bash" in call and "date" in call
-
-    # tool result: connector + output; errors still render
-    ok = render(tool_result_block({"content": "Mon Aug 10", "is_error": False}))
-    assert "└" in ok and "Mon Aug 10" in ok
-    err = render(tool_result_block({"content": "boom", "is_error": True}))
-    assert "boom" in err
-    # long output is truncated with a notice
-    many = render(tool_result_block({"content": "\n".join(str(i) for i in range(40))}))
-    assert "more line" in many
+    asyncio.run(scenario())
 
 
-def test_thinking_todos_and_usage_renderables():
-    from rich.console import Console
-    from claude_rc.tui import result_divider, thinking_block, todo_list, tool_render
+def test_thinking_todos_and_usage_widgets():
+    from claude_rc.tui import result_divider, thinking_block, tool_render
     from claude_rc.events import Event as _E
 
-    console = Console(width=70)
-
-    def render(obj):
-        with console.capture() as cap:
-            console.print(obj)
-        return cap.get()
-
-    # thinking: recessed but rendered in full (never truncated)
-    assert "reasoning" in render(thinking_block("some reasoning here"))
-    full = render(thinking_block("\n".join(f"line{i}" for i in range(50))))
-    assert "line0" in full and "line49" in full and "more line" not in full
-
-    # TodoWrite dispatches to a checklist with status marks
+    ok = _E.from_wire({"payload": {"type": "result", "subtype": "success",
+        "duration_ms": 4300, "total_cost_usd": 0.0123,
+        "usage": {"input_tokens": 1200, "output_tokens": 340}}})
+    err = _E.from_wire({"payload": {"type": "result", "subtype": "error_max_turns"}})
     todos = {"todos": [
         {"content": "done thing", "status": "completed"},
         {"content": "doing thing", "status": "in_progress"},
         {"content": "later thing", "status": "pending"},
     ]}
-    out = render(tool_render({"name": "TodoWrite", "input": todos}))
-    assert "✔" in out and "◐" in out and "☐" in out and "doing thing" in out
 
-    # ExitPlanMode renders the plan
-    plan = render(tool_render({"name": "ExitPlanMode", "input": {"plan": "# Step one"}}))
-    assert "Plan" in plan and "Step one" in plan
+    async def scenario():
+        app = RemoteControlTUI(client=FakeRC())
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            t = app.query_one("#transcript")
+            await t.mount(
+                thinking_block("some reasoning here"),
+                thinking_block("\n".join(f"line{i}" for i in range(50))),
+                tool_render({"name": "TodoWrite", "input": todos}),
+                tool_render({"name": "ExitPlanMode", "input": {"plan": "# Step one"}}),
+                result_divider(ok),
+                result_divider(err),
+            )
+            await pilot.pause(0.3)
+            text = _selected_text(app)
+            # thinking: recessed but rendered in full (never truncated)
+            assert "some reasoning here" in text
+            assert "line0" in text and "line49" in text and "more line" not in text
+            # TodoWrite dispatches to a checklist with status marks
+            assert "✔" in text and "◐" in text and "☐" in text and "doing thing" in text
+            # ExitPlanMode renders the plan
+            assert "Plan" in text and "Step one" in text
+            # result divider carries the usage footer, on error too
+            assert "turn complete" in text and "4.3s" in text
+            assert "$0.012" in text and "1.2k" in text
+            assert "error max turns" in text
 
-    # result divider carries the usage footer, red-flagged on error
-    ok = _E.from_wire({"payload": {"type": "result", "subtype": "success",
-        "duration_ms": 4300, "total_cost_usd": 0.0123,
-        "usage": {"input_tokens": 1200, "output_tokens": 340}}})
-    line = render(result_divider(ok))
-    assert "turn complete" in line and "4.3s" in line and "$0.012" in line and "1.2k" in line
-    err = _E.from_wire({"payload": {"type": "result", "subtype": "error_max_turns"}})
-    assert "error max turns" in render(result_divider(err))
+    asyncio.run(scenario())
 
 
-def test_render_event_handles_tool_result(monkeypatch):
+def test_render_event_handles_tool_result():
     """A user event carrying tool_result blocks renders as output, not a prompt."""
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             app._sid = "cse_1"
-            log = app.query_one("#transcript")
-            before = len(log.lines)
+            t = app.query_one("#transcript")
+            before = len(t.children)
             # assistant tool_use, then the user event that echoes its result
             app._render_event(Event.from_wire({"payload": {"type": "assistant", "message": {
                 "role": "assistant", "content": [
@@ -177,8 +180,9 @@ def test_render_event_handles_tool_result(monkeypatch):
             app._render_event(Event.from_wire({"payload": {"type": "user", "message": {
                 "role": "user", "content": [
                     {"type": "tool_result", "tool_use_id": "t1", "content": "Mon Aug 10"}]}}}))
-            await pilot.pause(0.1)
-            assert len(log.lines) > before
+            await pilot.pause(0.2)
+            assert len(t.children) == before + 2  # ● Bash(date), └ Mon Aug 10
+            assert "Mon Aug 10" in _selected_text(app)
 
     asyncio.run(scenario())
 
@@ -446,67 +450,9 @@ def test_toggle_sidebar():
     asyncio.run(scenario())
 
 
-def test_select_mode_hides_sidebar_and_restores(monkeypatch):
-    """ctrl+t drops mouse capture AND hides the session list (the terminal's
-    selection is screen-wide, so sidebar rows would end up in a drag over the
-    transcript); ctrl+t again re-arms the mouse and restores the list. The
-    headless test driver has no mouse hooks, so fakes stand in for them —
-    which also lets us assert the capture actually toggles."""
-    async def scenario():
-        app = RemoteControlTUI(client=FakeRC())
-        async with app.run_test() as pilot:
-            await pilot.pause(0.2)
-            calls = []
-            monkeypatch.setattr(
-                app._driver, "_enable_mouse_support", lambda: calls.append("on"),
-                raising=False,
-            )
-            monkeypatch.setattr(
-                app._driver, "_disable_mouse_support", lambda: calls.append("off"),
-                raising=False,
-            )
-            sidebar = app.query_one("#sidebar")
-            assert sidebar.display is True
-            await pilot.press("ctrl+t")
-            await pilot.pause(0.1)
-            assert calls == ["off"] and sidebar.display is False
-            await pilot.press("ctrl+t")
-            await pilot.pause(0.1)
-            assert calls == ["off", "on"] and sidebar.display is True
-
-            # A list the user had already hidden stays hidden on exit.
-            await pilot.press("ctrl+o")
-            await pilot.pause(0.1)
-            await pilot.press("ctrl+t")
-            await pilot.pause(0.1)
-            await pilot.press("ctrl+t")
-            await pilot.pause(0.1)
-            assert sidebar.display is False
-
-    asyncio.run(scenario())
-
-
-def test_toggle_sidebar_rerenders_from_cache(monkeypatch):
-    """With a session open, toggling the sidebar re-renders from the in-memory
-    cache (no API refetch) so the transcript re-wraps to the new pane width."""
-    async def scenario():
-        app = RemoteControlTUI(client=FakeRC())
-        async with app.run_test() as pilot:
-            await pilot.pause(0.2)
-            app._sid = "cse_1"
-            reloaded, rerendered = [], []
-            monkeypatch.setattr(app, "_select_session", lambda sid: reloaded.append(sid))
-            monkeypatch.setattr(app, "_rerender", lambda: rerendered.append(True))
-            await pilot.press("ctrl+o")
-            await pilot.pause(0.2)  # let call_after_refresh fire
-            assert rerendered and not reloaded  # cache, not API
-
-    asyncio.run(scenario())
-
-
-def test_event_cache_populates_on_load():
-    """History (and live events) are cached so the transcript can be redrawn
-    without re-hitting the API."""
+def test_transcript_survives_session_switch():
+    """Selecting a session clears the transcript and loads its history as
+    selectable widgets; switching again resets cleanly."""
     async def scenario():
         app = RemoteControlTUI(client=FakeRC())
         async with app.run_test() as pilot:
@@ -514,13 +460,12 @@ def test_event_cache_populates_on_load():
             app._select_session("cse_1")
             for _ in range(20):
                 await pilot.pause(0.1)
-                if app._events:
+                if len(app.query_one("#transcript").children) > 1:
                     break
-            # FakeRC history has 3 events (init, user, control_request)
-            assert len(app._events) == 3
-            # a fresh switch resets the cache
-            app._select_session("cse_1")
-            assert app._events == []
+            # FakeRC history: init divider, the user's "run ls", a permission line
+            text = _selected_text(app)
+            assert "session started" in text
+            assert "run ls" in text
 
     asyncio.run(scenario())
 

@@ -5,10 +5,19 @@ live transcript, a composer, steering commands, and first-class handling of
 permission prompts (``can_use_tool``) with an approval modal.
 
 The transcript mirrors the Claude Code CLI's own look — user turns on a
-full-width chevron bar, assistant turns as Markdown (syntax-highlighted code
-fences, lists, inline code) beside a ``●`` bullet, and tool calls as
-``● Name(arg)`` with their output hanging below on a ``└`` connector — rendered
-in this project's colour scheme.
+full-width chevron bar, assistant turns as Markdown beside a ``●`` bullet, and
+tool calls as ``● Name(arg)`` with their output hanging below on a ``└``
+connector — rendered in this project's colour scheme.
+
+The transcript is a scroll of real widgets (one per message), NOT a
+``RichLog``. That choice is deliberate and earned the hard way: a ``RichLog``
+rasterises its writes into screen strips and throws the text away, which made
+transcript text unselectable and un-reflowable — spawning a pile of
+workarounds (a mouse-release "select mode", a re-render-on-resize event
+cache) that are all gone now. With widgets, Textual's own text selection
+works: **drag over the transcript to select** (only the transcript — a drag
+selects widgets between its endpoints, never the sidebar beside them), then
+**ctrl+c** to copy. Resizes and sidebar toggles reflow natively.
 
 Run it with::
 
@@ -18,17 +27,7 @@ Run it with::
 
 Keys: **ctrl+x** interrupt · **ctrl+g** review pending approvals ·
 **ctrl+r** refresh sessions · **ctrl+o** hide/show the session list ·
-**ctrl+t** toggle select-text mode · **ctrl+q** quit.
-
-To copy transcript text, press **ctrl+t** to enter *select mode*: this hands
-the mouse back to your terminal so its native click-drag selection works over
-the whole screen — the transcript included — and **⌘C / Ctrl+C** copies as
-usual. The session list is hidden while select mode is on (the terminal's
-selection is screen-wide, so this keeps a drag from grabbing the sidebar rows
-too) and restored when you press **ctrl+t** again, which also brings back in-app
-clicking and scrolling. (A Textual app captures every mouse event for itself,
-which is what otherwise prevents selecting transcript text — even Shift-drag
-doesn't reliably escape it.)
+**ctrl+q** quit · **ctrl+c** copy selected text.
 
 Composer commands (anything else is sent to the session as a message —
 including ``/...`` slash commands, which the worker runs locally):
@@ -51,16 +50,13 @@ import threading
 from collections import deque
 from typing import Optional
 
-from rich.console import Group
-from rich.markdown import Markdown
 from rich.markup import escape
-from rich.padding import Padding
-from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     Footer,
@@ -69,8 +65,8 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
+    Markdown,
     OptionList,
-    RichLog,
     SelectionList,
     Static,
 )
@@ -138,33 +134,36 @@ def _arg_preview(value, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-# --- transcript renderables (claude.ai/code look, our palette) --------------
-def user_bar(text: str, width: int | None = None) -> Group:
-    """A user turn: the message on a full-width tinted bar with a ``›`` chevron
-    and a blank line above and below, the way the Claude Code CLI stands out
-    what you typed. ``Padding`` fills every line's background to the full width —
-    including wrapped continuation lines and short messages — so the bar is
-    always a solid block, never ragged. ``width`` is accepted for call-site
-    compatibility but ignored (the bar expands to the log's width)."""
+# --- transcript widgets (claude.ai/code look, our palette) ------------------
+# Each factory returns a WIDGET, not a bare renderable. The transcript mounts
+# them into a VerticalScroll, and Textual extracts selected text from any
+# widget whose content is a string or rich Text — which is why these stick to
+# Text/str content (plus the Markdown widget, whose blocks are Static-based
+# and selectable too). A Rich Table/Padding render would draw fine but turn
+# into an unselectable bitmap-of-strips, which is the RichLog trap all over.
+def user_bar(text: str) -> Static:
+    """A user turn: the message on a full-width tinted bar with a ``›``
+    chevron, the way the Claude Code CLI stands out what you typed. The bar's
+    background and the blank line above/below come from CSS (``.user-bar``),
+    so the content stays a plain selectable Text."""
     body = Text()
     body.append("› ", style=f"bold {BLUE}")
     body.append(text, style="bold")
-    bar = Padding(body, (0, 1), style=f"on {USER_BG}", expand=True)
-    return Group(Text(""), bar, Text(""))
+    return Static(body, classes="user-bar")
 
 
-def assistant_body(text: str) -> Table:
-    """An assistant turn: a ``●`` bullet in a gutter with the message rendered as
-    Markdown beside it — code fences get syntax highlighting, and lists / bold /
-    inline code render the way they do in the Claude Code CLI."""
-    grid = Table.grid(expand=True)
-    grid.add_column(width=2, no_wrap=True)
-    grid.add_column(ratio=1)
-    grid.add_row(Text("●", style=f"bold {ACCENT}"), Markdown(text))
-    return grid
+def assistant_body(text: str) -> Horizontal:
+    """An assistant turn: a ``●`` bullet in a gutter with the message rendered
+    by Textual's Markdown widget beside it — code fences, lists, bold, inline
+    code — and every paragraph selectable."""
+    return Horizontal(
+        Label(Text("●", style=f"bold {ACCENT}"), classes="gutter"),
+        Markdown(text),
+        classes="turn",
+    )
 
 
-def tool_call_line(tool: dict) -> Text:
+def tool_call_line(tool: dict) -> Static:
     """A tool call: ``● Name(arg)`` — green bullet, bold name, dim-parenthesised
     argument (the command for Bash, the path for file tools, …)."""
     name = tool.get("name") or "tool"
@@ -176,7 +175,7 @@ def tool_call_line(tool: dict) -> Text:
         line.append("(", style=MUTED)
         line.append(arg, style=BLUE)
         line.append(")", style=MUTED)
-    return line
+    return Static(line)
 
 
 def _result_text(block: dict) -> tuple[str, bool]:
@@ -194,19 +193,18 @@ def _result_text(block: dict) -> tuple[str, bool]:
     return "".join(parts), is_error
 
 
-def thinking_block(text: str) -> Table:
+def thinking_block(text: str) -> Horizontal:
     """Extended thinking, recessed but rendered in full: a ``✻`` gutter with the
     text dim + italic. Never truncated — the reasoning is how you confirm you're
     on the same page — it just flows into the scrollback."""
-    body = Text(text.strip(), style="italic dim")
-    grid = Table.grid(expand=True)
-    grid.add_column(width=2, no_wrap=True)
-    grid.add_column(ratio=1)
-    grid.add_row(Text("✻", style=MUTED), body)
-    return grid
+    return Horizontal(
+        Label(Text("✻", style=MUTED), classes="gutter"),
+        Static(Text(text.strip(), style="italic dim")),
+        classes="turn",
+    )
 
 
-def todo_list(inp: dict) -> Text:
+def todo_list(inp: dict) -> Static:
     """A TodoWrite call as a checklist — done (✔), in-progress (◐), pending (☐) —
     the way the Claude Code CLI surfaces its plan."""
     out = Text()
@@ -225,22 +223,21 @@ def todo_list(inp: dict) -> Text:
             mark, mstyle, cstyle = "☐", MUTED, MUTED
         out.append(f"\n  {mark} ", style=mstyle)
         out.append(content, style=cstyle)
-    return out
+    return Static(out)
 
 
-def plan_block(inp: dict) -> Table:
+def plan_block(inp: dict) -> Horizontal:
     """An ExitPlanMode call: the proposed plan rendered as Markdown under a
     ``●`` bullet, so it reads as the plan it is rather than tool arguments."""
-    grid = Table.grid(expand=True)
-    grid.add_column(width=2, no_wrap=True)
-    grid.add_column(ratio=1)
-    grid.add_row(Text("●", style=f"bold {ACCENT}"),
-                 Markdown("**Plan**\n\n" + (inp.get("plan") or "")))
-    return grid
+    return Horizontal(
+        Label(Text("●", style=f"bold {ACCENT}"), classes="gutter"),
+        Markdown("**Plan**\n\n" + (inp.get("plan") or "")),
+        classes="turn",
+    )
 
 
-def tool_render(tool: dict):
-    """Dispatch a tool call to its renderer — checklist for TodoWrite, a plan
+def tool_render(tool: dict) -> Widget:
+    """Dispatch a tool call to its widget — checklist for TodoWrite, a plan
     for ExitPlanMode, otherwise the compact ``● Name(arg)`` line."""
     name = tool.get("name")
     inp = tool.get("input")
@@ -257,7 +254,7 @@ def _fmt_n(n) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def result_divider(ev: Event) -> Text:
+def result_divider(ev: Event) -> Static:
     """The turn-complete divider, carrying the usage footer Claude prints —
     duration, cost, tokens — and turning red when the turn errored."""
     ok = ev.subtype in (None, "success")
@@ -273,10 +270,10 @@ def result_divider(ev: Event) -> Text:
     if inp_t or out_t:
         bits.append(f"{_fmt_n(inp_t)}↑ {_fmt_n(out_t)}↓")
     line = Text(f"── {' · '.join(bits)} ──", style="dim" if ok else f"bold {DANGER}")
-    return line
+    return Static(line)
 
 
-def tool_result_block(block: dict, max_lines: int = 10) -> Text:
+def tool_result_block(block: dict, max_lines: int = 10) -> Static:
     """A tool result hanging under its call on a ``└`` connector, truncated to
     ``max_lines`` (errors in red)."""
     text, is_error = _result_text(block)
@@ -285,12 +282,13 @@ def tool_result_block(block: dict, max_lines: int = 10) -> Text:
     shown, extra = lines[:max_lines], len(lines) - max_lines
     out = Text()
     for i, line in enumerate(shown):
+        if i:
+            out.append("\n")
         out.append("  └ " if i == 0 else "    ", style=MUTED)
         out.append(line, style=color)
-        out.append("\n")
     if extra > 0:
-        out.append(f"    … +{extra} more line{'s' if extra != 1 else ''}\n", style=MUTED)
-    return out
+        out.append(f"\n    … +{extra} more line{'s' if extra != 1 else ''}", style=MUTED)
+    return Static(out)
 
 
 class ApprovalScreen(ModalScreen[tuple]):
@@ -439,7 +437,6 @@ class RemoteControlTUI(App):
         Binding("ctrl+g", "show_approvals", "Approvals"),
         Binding("ctrl+r", "refresh_sessions", "Refresh"),
         Binding("ctrl+o", "toggle_sidebar", "Sidebar"),
-        Binding("ctrl+t", "toggle_select", "Select text"),
     ]
 
     CSS = """
@@ -459,6 +456,18 @@ class RemoteControlTUI(App):
     #session-list > ListItem.attached.-highlight { background: $accent 30%; }
 
     #transcript { padding: 0 1; }
+
+    /* Transcript entries: every widget sizes to its content. The user bar's
+       background + breathing room live here (the content is a plain Text so
+       selection can extract it). Gutter turns put the bullet in a 2-cell
+       column with the body flexing beside it. */
+    #transcript > Static { height: auto; }
+    #transcript .user-bar { background: #24406b; padding: 0 1; margin: 1 0; }
+    #transcript .turn { height: auto; }
+    #transcript .turn > .gutter { width: 2; }
+    #transcript .turn > Static { width: 1fr; height: auto; }
+    #transcript .turn > Markdown { width: 1fr; height: auto; padding: 0; }
+
     #composer { dock: bottom; margin-top: 1; }
     """
 
@@ -471,18 +480,9 @@ class RemoteControlTUI(App):
         self._stream_rc: Optional[RemoteControlClient] = None
         self._stream_thread: Optional[threading.Thread] = None
         self._sessions: list[dict] = []
-        # Events rendered for the open session, kept so the transcript can be
-        # re-rendered (e.g. re-wrapped on a sidebar toggle) without re-hitting
-        # the API. Reset on every session switch.
-        self._events: list[Event] = []
         self._approvals: deque[Event] = deque()
         self._answered: set[str] = set()
         self._modal_open = False
-        # "Select text" mode: when on, we drop Textual's mouse capture so the
-        # terminal's own click-drag selection works over the whole screen —
-        # including the transcript, which in-app selection can't reach.
-        self._select_mode = False
-        self._sidebar_before_select = True
 
     # -- layout ------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -491,12 +491,10 @@ class RemoteControlTUI(App):
             with Vertical(id="sidebar"):
                 yield ListView(id="session-list")
             with Vertical():
-                # min_width=20 (default is 78): without this, content refuses to
-                # wrap below 78 columns and overflows horizontally on a narrow
-                # terminal / phone instead of reflowing to the pane width.
-                yield RichLog(
-                    id="transcript", markup=True, wrap=True, auto_scroll=True, min_width=20
-                )
+                # A scroll of per-message widgets — NOT a RichLog. Widgets keep
+                # their text, so drag-selection and copy work, and they reflow
+                # natively on any resize (no width caching, no min_width hack).
+                yield VerticalScroll(id="transcript")
                 yield Input(
                     placeholder="Message the session…  (:model, :perm, :interrupt, :archive, :q)",
                     id="composer",
@@ -504,6 +502,9 @@ class RemoteControlTUI(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Anchor = RichLog's auto_scroll: pinned to the bottom as content
+        # arrives, released while you scroll up, re-grabbed at the bottom.
+        self.query_one("#transcript", VerticalScroll).anchor()
         self.action_refresh_sessions()
         self.set_interval(8.0, self.action_refresh_sessions)
 
@@ -559,14 +560,13 @@ class RemoteControlTUI(App):
     def _select_session(self, sid: str) -> None:
         self._close_stream()
         self._sid = sid
-        self._events = []
         for item in self.query_one("#session-list", ListView).query(ListItem):
             item.set_class(getattr(item, "session_id", None) == sid, "attached")
         self._approvals.clear()
         self._answered.clear()
-        log = self.query_one("#transcript", RichLog)
-        log.clear()
-        log.write(f"[dim]· connecting to {escape(sid)}…[/dim]")
+        transcript = self.query_one("#transcript", VerticalScroll)
+        transcript.remove_children()
+        self._write(Static(f"[dim]· connecting to {escape(sid)}…[/dim]"))
         # Stream on our OWN daemon thread, not a Textual worker: the SSE read
         # blocks until the next heartbeat, and Textual's worker pool would wait
         # for it on quit — making exit hang for seconds. A daemon thread is
@@ -576,15 +576,11 @@ class RemoteControlTUI(App):
         )
         self._stream_thread.start()
 
-    def _rerender(self) -> None:
-        """Redraw the transcript from the in-memory event cache — no API call,
-        no stream reconnect. Used when only the render width changed (e.g. a
-        sidebar toggle); RichLog caches lines at their write-width, so replaying
-        the events re-wraps them to the pane's current width."""
-        log = self.query_one("#transcript", RichLog)
-        log.clear()
-        for ev in self._events:
-            self._render_event(ev)
+    def _write(self, *widgets: Widget) -> None:
+        """Mount widgets at the end of the transcript (the anchored scroll
+        keeps the view pinned to the bottom unless the user has scrolled up)."""
+        if widgets:
+            self.query_one("#transcript", VerticalScroll).mount(*widgets)
 
     def _close_stream(self) -> None:
         if self._stream_rc is not None:
@@ -637,17 +633,19 @@ class RemoteControlTUI(App):
         self.sub_title = " · ".join(
             x for x in (session.get("title"), model, session.get("worker_status")) if x
         )
-        self._events = list(history)  # seed the cache with history
+        # One batched mount for the whole history — far fewer layout passes
+        # than mounting event by event.
+        widgets: list[Widget] = []
         for ev in history:
-            self._render_event(ev)
+            widgets.extend(self._event_widgets(ev))
+        self._write(*widgets)
         for pending in pending_permissions(history):
             self._enqueue_approval(pending)
 
     def _on_event(self, sid: str, ev: Event) -> None:
         if self._sid != sid:
             return
-        self._events.append(ev)  # keep the cache current with the live stream
-        self._render_event(ev)
+        self._write(*self._event_widgets(ev))
         if ev.is_blocking_control and ev.control_subtype == "can_use_tool":
             self._enqueue_approval(ev)
         elif ev.type == "control_response" and ev.control_request_id:
@@ -657,40 +655,44 @@ class RemoteControlTUI(App):
 
     # -- transcript rendering ----------------------------------------------
     def _render_event(self, ev: Event) -> None:
-        log = self.query_one("#transcript", RichLog)
+        """Render one event at the end of the transcript."""
+        self._write(*self._event_widgets(ev))
+
+    def _event_widgets(self, ev: Event) -> list[Widget]:
+        """The transcript widgets for one event (usually one, sometimes several
+        — e.g. thinking + prose + tool calls — or none for telemetry)."""
+        out: list[Widget] = []
         text = ev.text().strip()
         if ev.role == "user":
             # A user event carrying tool_result blocks is the worker echoing tool
             # output back — render it as results, not as something you typed.
             results = ev.tool_results()
             if results:
-                for block in results:
-                    log.write(tool_result_block(block))
+                out.extend(tool_result_block(block) for block in results)
             elif text:
-                log.write(user_bar(text))
+                out.append(user_bar(text))
         elif ev.role == "assistant":
             think = ev.thinking().strip()
             if think:
-                log.write(thinking_block(think))
+                out.append(thinking_block(think))
             if text:
-                log.write(assistant_body(text))
-            for tool in ev.tool_uses():
-                log.write(tool_render(tool))
+                out.append(assistant_body(text))
+            out.extend(tool_render(tool) for tool in ev.tool_uses())
         elif ev.type == "system" and ev.subtype == "init":
             model = ev.payload.get("model") or "?"
-            log.write(f"[dim]── session started · {escape(str(model))} ──[/dim]")
+            out.append(Static(f"[dim]── session started · {escape(str(model))} ──[/dim]"))
         elif ev.type == "system" and ev.subtype == "compact_boundary":
-            log.write("[dim]── context compacted ──[/dim]")
+            out.append(Static("[dim]── context compacted ──[/dim]"))
         elif ev.type == "result":
-            log.write(result_divider(ev))
+            out.append(result_divider(ev))
         elif ev.type == "rate_limit_event":
             rl = ev.rate_limit_info() or {}
             if rl.get("level") == "reached":
                 reset = rl.get("resets_at")
                 tail = f" · resets {reset}" if isinstance(reset, str) else ""
-                log.write(f"[bold {DANGER}]⏳ usage limit reached{escape(tail)}[/]")
+                out.append(Static(f"[bold {DANGER}]⏳ usage limit reached{escape(tail)}[/]"))
             elif rl.get("level") == "warning":
-                log.write(f"[{MUTED}]⏳ approaching usage limit[/]")
+                out.append(Static(f"[{MUTED}]⏳ approaching usage limit[/]"))
             # a normal status pulse is telemetry — don't clutter the transcript
         elif ev.is_question:
             first = next(
@@ -698,15 +700,18 @@ class RemoteControlTUI(App):
                  if isinstance(q, dict) and q.get("question")),
                 "",
             )
-            log.write(f"[bold magenta]❓ question[/bold magenta] {escape(first)}")
+            out.append(Static(f"[bold magenta]❓ question[/bold magenta] {escape(first)}"))
         elif ev.is_blocking_control and ev.control_subtype == "can_use_tool":
             preview = _arg_preview(ev.tool_input)
-            log.write(
+            out.append(Static(
                 f"[bold magenta]🔐 permission[/bold magenta] {escape(ev.tool_name or 'tool')}"
                 f"[dim]{' ' + escape(preview) if preview else ''}[/dim]"
-            )
+            ))
         elif ev.is_blocking_control:
-            log.write(f"[bold magenta]⚠ needs you: {escape(ev.control_subtype or 'input')}[/bold magenta]")
+            out.append(Static(
+                f"[bold magenta]⚠ needs you: {escape(ev.control_subtype or 'input')}[/bold magenta]"
+            ))
+        return out
 
     # -- approvals ----------------------------------------------------------
     def _enqueue_approval(self, ev: Event) -> None:
@@ -783,9 +788,8 @@ class RemoteControlTUI(App):
 
     def _answer_question(self, ev: Event, answers: dict) -> None:
         sid, rid = self._sid, ev.control_request_id
-        log = self.query_one("#transcript", RichLog)
         summary = ", ".join(f"{v}" for v in answers.values()) if answers else "dismissed"
-        log.write(f"[dim]  ↳ answered: {escape(summary)}[/dim]")
+        self._write(Static(f"[dim]  ↳ answered: {escape(summary)}[/dim]"))
 
         def _send() -> None:
             try:
@@ -799,9 +803,8 @@ class RemoteControlTUI(App):
 
     def _answer(self, ev: Event, allow: bool, always: bool, message: str) -> None:
         sid, rid = self._sid, ev.control_request_id
-        log = self.query_one("#transcript", RichLog)
         verdict = "allowed (always)" if allow and always else ("allowed" if allow else "denied")
-        log.write(f"[dim]  ↳ {verdict}: {escape(ev.tool_name or 'tool')}[/dim]")
+        self._write(Static(f"[dim]  ↳ {verdict}: {escape(ev.tool_name or 'tool')}[/dim]"))
 
         def _send() -> None:
             try:
@@ -845,69 +848,15 @@ class RemoteControlTUI(App):
                 continue
         super().copy_to_clipboard(text)  # OSC 52 fallback (SSH / remote terminals)
 
-    def _set_sidebar(self, visible: bool) -> None:
-        """Show or hide the session list and re-wrap the transcript to the new
-        width. The transcript caches lines at their write-width and doesn't
-        reflow when the pane resizes, so a width change would leave the old wrap;
-        re-render from the event cache (no API call) once the layout has settled
-        — call_after_refresh defers until then. Focus moves to the composer when
-        the list is hidden so keys still land somewhere sensible."""
-        sidebar = self.query_one("#sidebar")
-        if sidebar.display == visible:
-            return
-        sidebar.display = visible
-        if not visible:
-            self.query_one("#composer", Input).focus()
-        if self._sid:
-            self.call_after_refresh(self._rerender)
-
     def action_toggle_sidebar(self) -> None:
         """Hide/show the session list so the transcript can take the full width
-        (handy on a narrow terminal / phone)."""
-        self._set_sidebar(not self.query_one("#sidebar").display)
-
-    def action_toggle_select(self) -> None:
-        """Toggle 'select text' mode.
-
-        A Textual app tells the terminal to report every mouse event (``\\x1b[?
-        1003h`` any-event tracking), which is what makes the app respond to
-        clicks and drags — but it also swallows the terminal's *own* click-drag
-        selection, so you can't select transcript text the way you would in a
-        normal terminal (and Shift-drag doesn't reliably escape any-event mode
-        in every terminal). Toggling this off drops mouse reporting entirely, so
-        the terminal takes the mouse back and native selection works across the
-        whole screen — transcript included, rich rendering intact, ⌘C / Ctrl+C
-        copies as usual. Toggle back on to click the sidebar / scroll again.
-
-        The terminal's selection is screen-wide, so we also hide the session
-        list while select mode is on — otherwise a drag over the transcript
-        grabs the sidebar rows beside it too. The list's prior visibility is
-        restored on the way out.
-
-        Uses the platform driver's private mouse hooks (there is no public API);
-        guarded so it degrades to a no-op rather than crashing if they're
-        absent (e.g. the web driver)."""
-        driver = self._driver
-        enable = getattr(driver, "_enable_mouse_support", None)
-        disable = getattr(driver, "_disable_mouse_support", None)
-        if driver is None or enable is None or disable is None:
-            return self.notify("select mode unavailable on this terminal", severity="warning")
-        self._select_mode = not self._select_mode
-        if self._select_mode:
-            disable()
-            # Remember whether the list was showing so we can put it back, then
-            # hide it for a clean full-width transcript to select over.
-            self._sidebar_before_select = self.query_one("#sidebar").display
-            self._set_sidebar(False)
-            self.notify(
-                "select mode ON — drag over the transcript, ⌘C/Ctrl+C to copy; "
-                "ctrl+t to exit",
-                timeout=6,
-            )
-        else:
-            enable()
-            self._set_sidebar(getattr(self, "_sidebar_before_select", True))
-            self.notify("select mode OFF — sidebar + mouse restored")
+        (handy on a narrow terminal / phone). Focus moves to the composer when
+        the list is hidden so keys still land somewhere sensible. The transcript
+        is real widgets, so it reflows to the new width by itself."""
+        sidebar = self.query_one("#sidebar")
+        sidebar.display = not sidebar.display
+        if not sidebar.display:
+            self.query_one("#composer", Input).focus()
 
     def action_show_approvals(self) -> None:
         if not self._approvals and not self._modal_open:
